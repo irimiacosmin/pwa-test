@@ -29,7 +29,11 @@
 
   const isIos = () => {
     const userAgent = window.navigator.userAgent.toLowerCase();
-    alert("Is ios: " + userAgent);
+    var ua = window.navigator.userAgent;
+    var iOS = !!ua.match(/ipad/i) || !!ua.match(/iphone/i) || !!ua.match(/ipod/i);
+    var webkit = !!ua.match(/WebKit/i);
+    var iOSSafari = iOS && webkit && !ua.match(/CriOS/i) && !ua.match(/OPiOS/i);
+    alert("Is ios: " + userAgent + " " + iOSSafari);
     return /iphone|ipad|ipod/.test(userAgent);
   };
 
