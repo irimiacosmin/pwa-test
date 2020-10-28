@@ -29,7 +29,14 @@
 
   const isIos = () => {
     const userAgent = window.navigator.userAgent.toLowerCase();
+    alert("Is ios: " + userAgent);
     return /iphone|ipad|ipod/.test(userAgent);
+  };
+
+  const isSafari = () => {
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    alert("Is safari: " + userAgent);
+    return /safari/.test(userAgent);
   };
 
   const INSTALL_POPUP_ITEM_KEY = "@installPopup";
