@@ -42,7 +42,7 @@
       };
 
       if ("serviceWorker" in navigator) {
-        const wb = new Workbox("swPwa.js", { scope: "/" });
+        const wb = new Workbox("swPwa.js", { scope: "/pwa-test/leaflet-wallet/loader/" });
 
         wb.register().then((registration) => {
           registration.addEventListener("updatefound", () => {

@@ -20,9 +20,9 @@
       "purpose": "any maskable"
     }
   ],
-  "start_url": "/",
+  "start_url": "/pwa-test/leaflet-wallet/loader/",
   "background_color": "#16767c",
   "display": "standalone",
-  "scope": "/",
+  "scope": "/pwa-test/leaflet-wallet/loader/",
   "theme_color": "#16767c"
 }
