@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="BranchesTreeState">
+    <expand>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="LOCAL_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="REMOTE_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="REMOTE_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="GROUP_NODE:origin" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+    </expand>
+    <select />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="003a1079-e6ea-4630-b973-a85e6be4be3d" name="Default Changelist" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectId" id="1jSlKzFHYUlg42XSFgwqybzVscp" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
+    <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+    <property name="TERMINAL_CUSTOM_COMMANDS_GOT_IT" value="true" />
+    <property name="WebServerToolWindowFactoryState" value="false" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$/../epi-workspace" />
+    <property name="nodejs_package_manager_path" value="npm" />
+    <property name="ts.external.directory.path" value="C:\Program Files\JetBrains\WebStorm 2020.1.2\plugins\JavaScriptLanguage\jsLanguageServicesImpl\external" />
+  </component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\CosminIulianIrimia\Documents\Work\pwa-test" />
+    </key>
+  </component>
+  <component name="RunManager" selected="npm.build">
+    <configuration name="build" type="js.build_tools.npm" temporary="true" nameIsGenerated="true">
+      <package-json value="$PROJECT_DIR$/package.json" />
+      <command value="run" />
+      <scripts>
+        <script value="build" />
+      </scripts>
+      <node-interpreter value="project" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="deploy" type="js.build_tools.npm" temporary="true" nameIsGenerated="true">
+      <package-json value="$PROJECT_DIR$/package.json" />
+      <command value="run" />
+      <scripts>
+        <script value="deploy" />
+      </scripts>
+      <node-interpreter value="project" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <configuration name="update" type="js.build_tools.npm" temporary="true" nameIsGenerated="true">
+      <package-json value="$PROJECT_DIR$/package.json" />
+      <command value="run" />
+      <scripts>
+        <script value="update" />
+      </scripts>
+      <node-interpreter value="project" />
+      <envs />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="npm.build" />
+        <item itemvalue="npm.update" />
+        <item itemvalue="npm.deploy" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SvnConfiguration">
+    <configuration />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="003a1079-e6ea-4630-b973-a85e6be4be3d" name="Default Changelist" comment="" />
+      <created>1603805313524</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1603805313524</updated>
+      <workItem from="1603805314750" duration="15203000" />
+      <workItem from="1603969838028" duration="1738000" />
+      <workItem from="1604059865577" duration="92000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="2" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="oldMeFiltersMigrated" value="true" />
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="592" y="242" key="FileChooserDialogImpl" timestamp="1603959016448">
+      <screen x="0" y="0" width="1536" height="834" />
+    </state>
+    <state x="592" y="242" key="FileChooserDialogImpl/0.0.1536.834/1920.0.1920.1170@0.0.1536.834" timestamp="1603959016448" />
+    <state x="2660" y="339" key="FileChooserDialogImpl/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603886869789" />
+    <state width="1515" height="440" key="GridCell.Tab.0.bottom" timestamp="1603984569329">
+      <screen x="1920" y="0" width="1920" height="1170" />
+    </state>
+    <state width="1899" height="655" key="GridCell.Tab.0.bottom/0.0.1536.834/1920.0.1920.1170@0.0.1536.834" timestamp="1603962577513" />
+    <state width="1515" height="440" key="GridCell.Tab.0.bottom/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603984569329" />
+    <state width="1515" height="440" key="GridCell.Tab.0.bottom/0.0.1536.834@0.0.1536.834" timestamp="1603970041309" />
+    <state width="1515" height="440" key="GridCell.Tab.0.center" timestamp="1603984569329">
+      <screen x="1920" y="0" width="1920" height="1170" />
+    </state>
+    <state width="1899" height="655" key="GridCell.Tab.0.center/0.0.1536.834/1920.0.1920.1170@0.0.1536.834" timestamp="1603962577513" />
+    <state width="1515" height="440" key="GridCell.Tab.0.center/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603984569329" />
+    <state width="1515" height="440" key="GridCell.Tab.0.center/0.0.1536.834@0.0.1536.834" timestamp="1603970041309" />
+    <state width="1515" height="440" key="GridCell.Tab.0.left" timestamp="1603984569328">
+      <screen x="1920" y="0" width="1920" height="1170" />
+    </state>
+    <state width="1899" height="655" key="GridCell.Tab.0.left/0.0.1536.834/1920.0.1920.1170@0.0.1536.834" timestamp="1603962577513" />
+    <state width="1515" height="440" key="GridCell.Tab.0.left/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603984569328" />
+    <state width="1515" height="440" key="GridCell.Tab.0.left/0.0.1536.834@0.0.1536.834" timestamp="1603970041309" />
+    <state width="1515" height="440" key="GridCell.Tab.0.right" timestamp="1603984569329">
+      <screen x="1920" y="0" width="1920" height="1170" />
+    </state>
+    <state width="1899" height="655" key="GridCell.Tab.0.right/0.0.1536.834/1920.0.1920.1170@0.0.1536.834" timestamp="1603962577513" />
+    <state width="1515" height="440" key="GridCell.Tab.0.right/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603984569329" />
+    <state width="1515" height="440" key="GridCell.Tab.0.right/0.0.1536.834@0.0.1536.834" timestamp="1603970041309" />
+    <state x="2586" y="318" width="588" height="534" key="find.popup" timestamp="1603879741581">
+      <screen x="1920" y="0" width="1920" height="1170" />
+    </state>
+    <state x="2586" y="318" width="588" height="534" key="find.popup/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603879741581" />
+    <state x="2543" y="257" width="672" height="678" key="search.everywhere.popup" timestamp="1603880402385">
+      <screen x="1920" y="0" width="1920" height="1170" />
+    </state>
+    <state x="2543" y="257" width="672" height="678" key="search.everywhere.popup/0.0.1536.834/1920.0.1920.1170@1920.0.1920.1170" timestamp="1603880402385" />
+  </component>
+</project>
