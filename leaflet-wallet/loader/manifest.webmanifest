@@ -2,6 +2,9 @@
   "short_name": "EPI",
   "name": "EPI",
   "description": "Dossiers' User Interface",
+  "theme_color": "rgb(0,52,91)",
+  "background_color": "rgb(0,52,91)",
+  "display": "standalone",
   "icons": [
     {
       "src": "assets/images-pwa/icons-192.png",
