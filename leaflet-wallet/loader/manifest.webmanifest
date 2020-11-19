@@ -56,8 +56,6 @@
     }
   ],
   "start_url": "/leaflet-wallet/loader/",
-  "background_color": "#16767c",
   "display": "standalone",
-  "scope": "/leaflet-wallet/loader/",
-  "theme_color": "#16767c"
+  "scope": "/leaflet-wallet/loader/"
 }
