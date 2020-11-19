@@ -522,8 +522,16 @@ function Archive(archiveConfigurator) {
             storageProvider: storageProvider,
             keySSI,
 
-            brickFactoryCallback: () => {
-                return new Brick(keySSI);
+            brickFactoryFunction: (encrypt) => {
+                encrypt = (typeof encrypt === 'undefined') ? true : !!encrypt;
+                if (encrypt) {
+                    return new Brick(keySSI);
+                }
+
+                // Strip the encryption key from the SeedSSI
+                const SSIKeys = require("opendsu").loadApi("keyssi");
+                let key = SSIKeys.buildSeedSSI(keySSI.getDLDomain(), undefined, keySSI.getControl(), keySSI.getVn());
+                return new Brick(key);
             },
 
             brickDataExtractorCallback: (brickMeta, brick, callback) => {
@@ -595,14 +603,13 @@ function Archive(archiveConfigurator) {
     const _writeFile = (barPath, data, options, callback) => {
         if (typeof options === "function") {
             callback = options;
-            options = {};
-            options.encrypt = true;
+            options = {
+                encrypt: true
+            }
         }
         barPath = pskPth.normalize(barPath);
 
-        archiveConfigurator.setIsEncrypted(options.encrypt);
-
-        brickStorageService.ingestData(data, (err, result) => {
+        brickStorageService.ingestData(data, options, (err, result) => {
             if (err) {
                 return callback(err);
             }
@@ -667,14 +674,14 @@ function Archive(archiveConfigurator) {
     const _addFile = (fsFilePath, barPath, options, callback) => {
         if (typeof options === "function") {
             callback = options;
-            options = {};
-            options.encrypt = true;
+            options = {
+                encrypt: true
+            }
         }
 
         barPath = pskPth.normalize(barPath);
-        archiveConfigurator.setIsEncrypted(options.encrypt);
 
-        brickStorageService.ingestFile(fsFilePath, (err, result) => {
+        brickStorageService.ingestFile(fsFilePath, options, (err, result) => {
             if (err) {
                 return callback(err);
             }
@@ -692,16 +699,19 @@ function Archive(archiveConfigurator) {
     const _addFiles = (files, barPath, options, callback) => {
         if (typeof options === "function") {
             callback = options;
-            options = {};
-            options.encrypt = true;
+            options = {
+                encrypt: true,
+                batch: false
+            };
         }
 
         barPath = pskPth.normalize(barPath);
-        archiveConfigurator.setIsEncrypted(options.encrypt);
 
         const filesArray = files.slice();
 
-        brickStorageService.ingestFiles(filesArray, (err, result) => {
+        const ingestionMethod = (!options.batch) ? 'ingestFiles' :'createBrickFromFiles';
+
+        brickStorageService[ingestionMethod](filesArray, options, (err, result) => {
             if (err) {
                 return callback(err);
             }
@@ -713,9 +723,11 @@ function Archive(archiveConfigurator) {
     this.addFiles = (files, barPath, options, callback) => {
         if (typeof options === "function") {
             callback = options;
-            options = {};
-            options.encrypt = true;
-            options.ignoreMounts = false;
+            options = {
+                encrypt: true,
+                ignoreMounts: false,
+                batch: false
+            };
         }
 
         if (options.ignoreMounts === true) {
@@ -760,16 +772,38 @@ function Archive(archiveConfigurator) {
      * @param {string|Buffer|stream.ReadableStream} data
      * @param {callback} callback
      */
-    this.appendToFile = (barPath, data, callback) => {
-        barPath = pskPth.normalize(barPath);
+    this.appendToFile = (barPath, data, options, callback) => {
+        const defaultOpts = {encrypt: true, ignoreMounts: false};
+        if (typeof options === "function") {
+            callback = options;
+            options = {};
+        }
 
-        brickStorageService.ingestData(data, (err, result) => {
-            if (err) {
-                return callback(err);
-            }
+        Object.assign(defaultOpts, options);
+        options = defaultOpts;
 
-            brickMapController.appendToFile(barPath, result, callback);
-        });
+        if (options.ignoreMounts) {
+            barPath = pskPth.normalize(barPath);
+            brickStorageService.ingestData(data, options, (err, result) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                brickMapController.appendToFile(barPath, result, callback);
+            });
+        } else {
+            this.getArchiveForPath(barPath, (err, dossierContext) => {
+                if (err) {
+                    return callback(err);
+                }
+                if (dossierContext.readonly === true) {
+                    return callback(Error("Tried to write in a readonly mounted RawDossier"));
+                }
+
+                options.ignoreMounts = true;
+                dossierContext.archive.appendToFile(dossierContext.relativePath, data, options, callback);
+            });
+        }
     };
 
     /**
@@ -781,13 +815,16 @@ function Archive(archiveConfigurator) {
     const _addFolder = (fsFolderPath, barPath, options, callback) => {
         if (typeof options === "function") {
             callback = options;
-            options = {};
-            options.encrypt = true;
+            options = {
+                encrypt: true,
+                batch: false
+            };
         }
         barPath = pskPth.normalize(barPath);
-        archiveConfigurator.setIsEncrypted(options.encrypt);
 
-        brickStorageService.ingestFolder(fsFolderPath, (err, result) => {
+        const ingestionMethod = (!options.batch) ? 'ingestFolder' :'createBrickFromFolder';
+
+        brickStorageService[ingestionMethod](fsFolderPath, options, (err, result) => {
             if (err) {
                 return callback(err);
             }
@@ -870,13 +907,16 @@ function Archive(archiveConfigurator) {
         }
 
         let fileList;
+        let error;
         try {
             fileList = brickMapController.getFileList(folderBarPath, options.recursive);
         } catch (e) {
-            return callback(e);
+            error = e;
         }
 
-        callback(undefined, fileList);
+        setTimeout(() => {
+            callback(error, fileList);
+        }, 0)
     };
 
     /**
@@ -891,7 +931,9 @@ function Archive(archiveConfigurator) {
             options = {recursive: true};
         }
 
-        callback(undefined, brickMapController.getFolderList(folderBarPath, options.recursive));
+        setTimeout(() => {
+            callback(undefined, brickMapController.getFolderList(folderBarPath, options.recursive));
+        }, 0);
     };
 
     /**
@@ -1013,7 +1055,7 @@ function Archive(archiveConfigurator) {
     }
 
     this.addFolder = (fsFolderPath, barPath, options, callback) => {
-        const defaultOpts = {encrypt: true, ignoreMounts: false};
+        const defaultOpts = {encrypt: true, ignoreMounts: false, batch: false};
         if (typeof options === "function") {
             callback = options;
             options = {};
@@ -1021,6 +1063,7 @@ function Archive(archiveConfigurator) {
 
         Object.assign(defaultOpts, options);
         options = defaultOpts;
+
 
         if (options.ignoreMounts === true) {
             _addFolder(fsFolderPath, barPath, options, callback);
@@ -1295,9 +1338,9 @@ function Archive(archiveConfigurator) {
         options = defaultOpts;
 
         if (options.ignoreMounts === true) {
-            _createFolder(barPath, options, callback);
+            _createFolder(barPath, callback);
         } else {
-            this.getArchiveForPath(path, (err, dossierContext) => {
+            this.getArchiveForPath(barPath, (err, dossierContext) => {
                 if (err) {
                     return callback(err);
                 }
@@ -1460,7 +1503,7 @@ function Archive(archiveConfigurator) {
 
 module.exports = Archive;
 
-},{"./Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","./BrickMapController":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapController.js","./BrickStorageService":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickStorageService\\index.js","./Manifest":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Manifest.js","blockchain":false,"path":false,"stream":false,"swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\ArchiveConfigurator.js":[function(require,module,exports){
+},{"./Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","./BrickMapController":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapController.js","./BrickStorageService":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickStorageService\\index.js","./Manifest":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Manifest.js","blockchain":false,"opendsu":false,"path":false,"stream":false,"swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\ArchiveConfigurator.js":[function(require,module,exports){
 const storageProviders = {};
 const fsAdapters = {};
 
@@ -1519,14 +1562,6 @@ function ArchiveConfigurator() {
 
     this.getBufferSize = () => {
         return config.bufferSize;
-    };
-
-    this.setIsEncrypted = (flag) => {
-        config.isEncrypted = flag;
-    };
-
-    this.getIsEncrypted = () => {
-        return config.isEncrypted;
     };
 
     this.setFsAdapter = (fsAdapterName, ...args) => {
@@ -1736,6 +1771,11 @@ function Brick(keySSI) {
             return callback(undefined, rawData);
         }
 
+        if (!transformParameters.key) {
+            rawData = transformedData;
+            return this.getRawData(callback);
+        }
+
         if (transformedData) {
             transform = transformFactory.createBrickTransform(keySSI);
             return transform.applyInverseTransform(transformedData, transformParameters, (err, _rawData) => {
@@ -1758,6 +1798,11 @@ function Brick(keySSI) {
     this.getTransformedData = (callback) => {
         if (typeof transformedData !== "undefined") {
             return callback(undefined, transformedData);
+        }
+
+        if (!keySSI.getSpecificString()) {
+            transformedData = rawData;
+            return this.getTransformedData(callback);
         }
 
         transformData((err, _transformedData) => {
@@ -1938,7 +1983,7 @@ const BrickMapDiff = require('./BrickMapDiff');
 const BrickMapStrategyFactory = require('./BrickMapStrategy');
 const anchoringStatus = require('./constants').anchoringStatus;
 
-const DEFAULT_BRICK_MAP_STRATEGY = "Diff";
+const DEFAULT_BRICK_MAP_STRATEGY = "LatestVersion";
 
 /**
  * BrickMap Proxy
@@ -1966,7 +2011,7 @@ function BrickMapController(options) {
     const config = options.config;
     const keySSI = options.keySSI;
     const brickStorageService = options.brickStorageService;
-    let legacyMode = false;
+    let legacyMode = true; // TODO: This needs to be removed
     const keyssi = require("opendsu").loadApi("keyssi");
     if (!config) {
         throw new Error('An ArchiveConfigurator is required!');
@@ -1980,8 +2025,8 @@ function BrickMapController(options) {
     // when trying to anchor outdated changes
     const ALIAS_SYNC_ERR_CODE = 428;
 
-    // let strategy = config.getBrickMapStrategy();
-    let strategy;
+    let strategy = config.getBrickMapStrategy();
+
     let validator = new AnchorValidator({
         rules: config.getValidationRules()
     });
@@ -2106,7 +2151,9 @@ function BrickMapController(options) {
         }
 
         currentDiffBrickMap = brickMapDiff;
-        callback(undefined, brickMapDiff);
+        setTimeout(() => {
+            callback(undefined, brickMapDiff);
+        })
     }
 
     /**
@@ -2115,7 +2162,9 @@ function BrickMapController(options) {
      */
     const moveNewDiffsToPendingAnchoringState = (callback) => {
         if (newDiffs.length === 0) {
-            return callback();
+            return setTimeout(() => {
+                callback();
+            })
         }
 
         const diff = newDiffs.shift();
@@ -2523,6 +2572,13 @@ function BrickMapController(options) {
     }
 
     /**
+     * @param {BrickMap}
+     */
+    this.setValidBrickMap = (brickMap) => {
+        validBrickMap = brickMap;
+    }
+
+    /**
      * @param {BrickMap} brickMap
      * @param callback
      */
@@ -2599,51 +2655,56 @@ function BrickMapController(options) {
 
             // Use the strategy to compact/merge any BrickMapDiff objects into a single
             // diff object. Once this happens the "pendingAnchoringDiff" list is emptied
-            const brickMap = strategy.compactDiffs(pendingAnchoringDiffs);
-
-            this.saveBrickMap(keySSI, brickMap, (err, hash) => {
+            strategy.compactDiffs(pendingAnchoringDiffs, (err, brickMap) => {
                 if (err) {
-                    pendingAnchoringDiffs.unshift(brickMap);
-                    return endAnchoring(listener, anchoringStatus.PERSIST_BRICKMAP_ERR, err);
+                    return callback(err);
                 }
 
-                const hashLink = keyssi.buildHashLinkSSI(keySSI.getDLDomain(), hash, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
-                // TODO: call strategy.signHash() and pass the signedHash
-                this.addVersion(keySSI, hashLink, lastValidHashLink, (err) => {
+                this.saveBrickMap(keySSI, brickMap, (err, hash) => {
                     if (err) {
-                        // In case of any errors, the compacted BrickMapDiff object
-                        // is put back into the "pending anchoring" state in case
-                        // we need to retry the anchoring process
                         pendingAnchoringDiffs.unshift(brickMap);
-
-                        // The anchoring middleware detected that we were trying
-                        // to anchor outdated changes. In order to finish anchoring
-                        // these changes the conflict must be first resolved
-                        if (err.statusCode === ALIAS_SYNC_ERR_CODE) {
-                            return this.handleAnchoringConflict(listener);
-                        }
-
-                        return endAnchoring(listener, anchoringStatus.ANCHOR_VERSION_ERR, err);
+                        return endAnchoring(listener, anchoringStatus.PERSIST_BRICKMAP_ERR, err);
                     }
 
-                    // After the alias is updated, the strategy is tasked
-                    // with updating the valid BrickMap with the new changes
-                    strategy.afterBrickMapAnchoring(brickMap, hashLink, (err, _hashLink) => {
+                    const hashLink = keyssi.buildHashLinkSSI(keySSI.getDLDomain(), hash, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
+                    // TODO: call strategy.signHash() and pass the signedHash
+                    this.addVersion(keySSI, hashLink, lastValidHashLink, (err) => {
                         if (err) {
-                            return endAnchoring(listener, anchoringStatus.BRICKMAP_UPDATE_ERR, err);
+                            // In case of any errors, the compacted BrickMapDiff object
+                            // is put back into the "pending anchoring" state in case
+                            // we need to retry the anchoring process
+                            pendingAnchoringDiffs.unshift(brickMap);
+
+                            // The anchoring middleware detected that we were trying
+                            // to anchor outdated changes. In order to finish anchoring
+                            // these changes the conflict must be first resolved
+                            if (err.statusCode === ALIAS_SYNC_ERR_CODE) {
+                                return this.handleAnchoringConflict(listener);
+                            }
+
+                            return endAnchoring(listener, anchoringStatus.ANCHOR_VERSION_ERR, err);
                         }
 
-                        lastValidHashLink = _hashLink;
-                        endAnchoring(listener, anchoringStatus.OK, _hashLink);
+                        // After the alias is updated, the strategy is tasked
+                        // with updating the valid BrickMap with the new changes
+                        strategy.afterBrickMapAnchoring(brickMap, hashLink, (err, _hashLink) => {
+                            if (err) {
+                                return endAnchoring(listener, anchoringStatus.BRICKMAP_UPDATE_ERR, err);
+                            }
 
-                        if (anchoringRequestExists()) {
-                            // Another anchoring was requested during the time this one
-                            // was in progress, as such, we start the process again
-                            this.anchorChanges(listener);
-                        }
-                    });
+                            lastValidHashLink = _hashLink;
+                            endAnchoring(listener, anchoringStatus.OK, _hashLink);
+
+                            if (anchoringRequestExists()) {
+                                // Another anchoring was requested during the time this one
+                                // was in progress, as such, we start the process again
+                                this.anchorChanges(listener);
+                            }
+                        });
+                    })
                 })
-            })
+            });
+
         })
     }
 
@@ -3342,14 +3403,14 @@ const BrickMapMixin = {
      */
     getTransformParameters: function (brickMeta) {
         if (typeof brickMeta === "undefined") {
-            return {key: this.keySSI.getEncryptionKey()}
+            return {key: this.keySSI.getIdentifier()}
         }
 
         const addTransformData = {};
-        if (brickMeta.key) {
-            addTransformData.key = Buffer.from(brickMeta.key);
-        }
-
+        // if (brickMeta.key) {
+        //     addTransformData.key = Buffer.from(brickMeta.key);
+        // }
+        addTransformData.key = brickMeta.key;
         return addTransformData;
     },
 
@@ -3385,7 +3446,7 @@ const BrickMapMixin = {
 
         if (this.header instanceof Brick) {
             this.header.setKeySSI(this.keySSI);
-            this.header.setTransformParameters({key: this.keySSI.getEncryptionKey()});
+            this.header.setTransformParameters({key: this.keySSI.getIdentifier()});
             this.header.getRawData((err, rawData) => {
                 if (err) {
                     return callback(err);
@@ -3561,6 +3622,7 @@ const BrickMapMixin = {
 }
 
 module.exports = BrickMapMixin;
+
 }).call(this)}).call(this,require("buffer").Buffer)
 
 },{"./Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","buffer":false,"swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\BrickMapStrategyMixin.js":[function(require,module,exports){
@@ -3679,9 +3741,9 @@ const BrickMapStrategyMixin = {
     },
 
     /**
-     * 
-     * @param {BrickMap} brickMap 
-     * @param {callback} callback 
+     *
+     * @param {BrickMap} brickMap
+     * @param {callback} callback
      */
     ifChangesShouldBeAnchored: function (brickMap, callback) {
         if (typeof this.decisionFunction !== 'function') {
@@ -3721,6 +3783,7 @@ const BrickMapStrategyMixin = {
 }
 
 module.exports = BrickMapStrategyMixin;
+
 },{}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\DiffStrategy.js":[function(require,module,exports){
 'use strict';
 
@@ -3896,7 +3959,7 @@ function DiffStrategy(options) {
      * @param {Array<BrickMapDiff} diffsList
      * @return {BrickMapDiff}
      */
-    this.compactDiffs = (diffsList) => {
+    this.compactDiffs = (diffsList, callback) => {
         const brickMap = diffsList.shift();
 
         while (diffsList.length) {
@@ -3905,7 +3968,7 @@ function DiffStrategy(options) {
             brickMap.applyDiff(brickMapDiff);
         }
 
-        return brickMap;
+        callback(undefined, brickMap);
     }
 
     /**
@@ -3990,16 +4053,326 @@ function DiffStrategy(options) {
 
 module.exports = DiffStrategy;
 
-},{"../../lib/Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","../../lib/BrickMapDiff":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapDiff.js","./BrickMapStrategyMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\BrickMapStrategyMixin.js","swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\bultinBrickMapStrategies.js":[function(require,module,exports){
-module.exports = {
-    DIFF: 'Diff'
+},{"../../lib/Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","../../lib/BrickMapDiff":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapDiff.js","./BrickMapStrategyMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\BrickMapStrategyMixin.js","swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\LatestVersionStrategy.js":[function(require,module,exports){
+'use strict';
+
+const BrickMapDiff = require('../BrickMapDiff');
+const BrickMap = require('../BrickMap');
+const BrickMapStrategyMixin = require('./BrickMapStrategyMixin');
+const Brick = require("../../lib/Brick");
+
+/**
+ * @param {object} options
+ * @param {callback} options.decisionFn Callback which will decide when to effectively anchor changes
+ *                                                              If empty, the changes will be anchored after each operation
+ * @param {callback} options.anchoringCb A callback which is called when the strategy anchors the changes
+ * @param {callback} options.signingFn  A function which will sign the new alias
+ * @param {callback} callback
+ */
+function LatestVersionStrategy(options) {
+    options = options || {};
+    Object.assign(this, BrickMapStrategyMixin);
+
+    ////////////////////////////////////////////////////////////
+    // Private methods
+    ////////////////////////////////////////////////////////////
+
+    /**
+     * @param {Array<string>} hashes
+     * @return {string}
+     */
+    const createBricksCacheKey = (hashes) => {
+        return hashes.map(hash => {
+            return hash.getIdentifier();
+        }).join(':');
+    };
+
+    /**
+     * @param {Array<Brick>} bricks
+     * @return {Array<BrickMapDiff}
+     */
+    const createMapsFromBricks = (bricks, callback) => {
+        const brickMaps = [];
+        const __createBrickMapsRecursively = (_bricks) => {
+            if (_bricks.length === 0) {
+                return setTimeout(() => {
+                    callback(undefined, brickMaps);
+                }, 0)
+            }
+
+            const brick = _bricks.shift();
+            this.brickMapController.createNewBrickMap(brick, (err, brickMap) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                brickMaps.push(brickMap);
+                __createBrickMapsRecursively(_bricks);
+            });
+        };
+
+        __createBrickMapsRecursively(bricks);
+    }
+
+    /**
+     * Get a list of BrickMap objects either from cache
+     * or from Brick storage
+     *
+     * @param {Array<string>} hashes
+     * @param {callback} callback
+     */
+    const createBrickMapsFromHistory = (hashes, callback) => {
+        const cacheKey = createBricksCacheKey(hashes);
+        if (this.hasInCache(cacheKey)) {
+            const brickMaps = this.getFromCache(cacheKey);
+            return setTimeout(() => {
+                callback(undefined, brickMaps);
+            }, 0)
+        }
+
+        const TaskCounter = require("swarmutils").TaskCounter;
+        const bricks = [];
+        const taskCounter = new TaskCounter(() => {
+            createMapsFromBricks(bricks, (err, brickMaps) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                this.storeInCache(cacheKey, brickMaps);
+                callback(undefined, brickMaps);
+            });
+        });
+        taskCounter.increment(hashes.length);
+        this.brickMapController.getMultipleBricks(hashes, (err, brickData) => {
+            if (err) {
+                return callback(err);
+            }
+
+            bricks.push(createBrick(brickData));
+            taskCounter.decrement();
+        });
+    }
+
+    const createBrick = (brickData) => {
+        const brick = new Brick();
+        brick.setTransformedData(brickData);
+        return brick;
+    };
+
+    /**
+     * Get the latest BrickMap version after validating the
+     * history
+     *
+     * @param {Array<string>} hashes
+     * @param {callback} callback
+     */
+    const getLatestVersion = (hashes, callback) => {
+        this.lastHashLink = hashes[hashes.length - 1];
+        createBrickMapsFromHistory([this.lastHashLink], (err, brickMaps) => {
+            if (err) {
+                return callback(err);
+            }
+
+            this.validator.validate('brickMapHistory', brickMaps, (err) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                const latestBrickMap = brickMaps[brickMaps.length - 1];
+                callback(undefined, latestBrickMap);
+            });
+        })
+    }
+
+
+    ////////////////////////////////////////////////////////////
+    // Public methods
+    ////////////////////////////////////////////////////////////
+
+    this.load = (keySSI, callback) => {
+        this.brickMapController.versions(keySSI, (err, versionHashes) => {
+            if (err) {
+                return callback(err);
+            }
+
+            if (!versionHashes.length) {
+                return callback(new Error(`No data found for alias <${keySSI.getAnchorId()}>`));
+            }
+
+            getLatestVersion(versionHashes, callback);
+        })
+    }
+
+
+    /**
+     * Compact a list of BrickMapDiff objects
+     * into a single BrickMap object
+     *
+     * @param {Array<BrickMapDiff>} diffsList
+     * @return {BrickMapDiff}
+     */
+    this.compactDiffs = (diffsList, callback) => {
+        if (diffsList[0].constructor === BrickMap) {
+            const brickMap = this.mergeDiffs(diffsList);
+            return setTimeout(() => {
+                callback(undefined, brickMap);
+            }, 0)
+        }
+
+        this.brickMapController.getValidBrickMap().clone((err, validBrickMapClone) => {
+            if (err) {
+                return callback(err);
+            }
+            const brickMap = this.mergeDiffs(validBrickMapClone, diffsList);
+            callback(undefined, brickMap);
+        })
+    }
+
+    /**
+     * Tell the BrickMapController to use the newly anchored
+     * BrickMap as a valid one
+     *
+     * @param {BrickMap} diff
+     * @param {string} brickMapHashLink
+     * @param {callback} callback
+     */
+    this.afterBrickMapAnchoring = (brickMap, brickMapHashLink, callback) => {
+        this.brickMapController.setValidBrickMap(brickMap)
+        this.lastHashLink = brickMapHashLink;
+        setTimeout(() => {
+            callback(undefined, brickMapHashLink);
+        }, 0)
+    }
+
+    /**
+     * Call the `conflictResolutionFn` if it exists
+     * @param {object} conflictInfo
+     * @param {BrickMap} conflictInfo.brickMap The up to date valid BrickMap
+     * @param {Array<BrickMapDiff} conflictInfo.pendingAnchoringDiffs A list of BrickMapDiff that were requested for anchoring or failed to anchor
+     * @param {Array<BrickMapDiff} conflictInfo.newDiffs A list of BrickMapDiff objects that haven't been scheduled for anchoring
+     * @param {callback} callback
+     */
+    this.handleConflict = (conflictInfo, callback) => {
+        if (typeof this.conflictResolutionFn !== 'function') {
+            return setTimeout(() => {
+                callback(conflictInfo.error);
+            }, 0)
+        }
+
+        this.conflictResolutionFn(this.brickMapController, {
+            validBrickMap: conflictInfo.brickMap,
+            pendingAnchoringDiffs: conflictInfo.pendingAnchoringDiffs,
+            newDiffs: conflictInfo.newDiffs,
+            error: conflictInfo.error
+        }, callback);
+    }
+
+    /**
+     * Try and fix an anchoring conflict
+     *
+     * Merge any "pending anchoring" BrickMapDiff objects in a clone
+     * of the valid brickMap. If merging fails, call the 'conflictResolutionFn'
+     * in order to fix the conflict. If merging succeeds, update the "dirtyBrickMap"
+     *
+     * @param {BrickMap} brickMap The up to date valid BrickMap
+     * @param {Array<BrickMapDiff} pendingAnchoringDiffs A list of BrickMapDiff that were requested for anchoring or failed to anchor
+     * @param {Array<BrickMapDiff} newDiffs A list of BrickMapDiff objects that haven't been scheduled for anchoring
+     * @param {callback} callback
+     */
+    this.reconcile = (brickMap, pendingAnchoringDiffs, newDiffs, callback) => {
+        // Try and apply the changes on a brickMap copy
+        brickMap.clone((err, brickMapCopy) => {
+            if (err) {
+                return callback(err);
+            }
+
+            try {
+                // create a copy of the pending diffs array because the merge function
+                // empties the array, and we need it intact in case conflict resolution
+                // is needed
+                const pendingAnchoringDiffsCopy = pendingAnchoringDiffs.map((diff) => diff);
+                brickMapCopy = this.mergeDiffs(brickMapCopy, pendingAnchoringDiffs);
+            } catch (e) {
+                return this.handleConflict({
+                    brickMap,
+                    pendingAnchoringDiffs,
+                    newDiffs,
+                    error: e
+                }, callback);
+            }
+
+            this.brickMapController.setDirtyBrickMap(brickMapCopy);
+            callback();
+        });
+    };
+
+    /**
+     * Merge diffs into a single BrickMap object
+     * Handles the case when the list of diffs contains
+     * whole BrickMap objects
+     *
+     * @param {BrickMap|Array<BrickMapMixin>} brickMap
+     * @param {Array<BrickMapMixin>|undefined} diffs
+     * @return {BrickMap}
+     */
+    this.mergeDiffs = (brickMap, diffs) => {
+        if (typeof diffs === 'undefined') {
+            diffs = brickMap;
+            brickMap = undefined;
+        }
+
+        if (!Array.isArray(diffs)) {
+            diffs = [diffs];
+        }
+
+        if (!brickMap && (!Array.isArray(diffs) || diffs.length < 2)) {
+            throw new Error('A target and a list of diffs is required');
+        }
+
+        if (!brickMap) {
+            brickMap = diffs.shift();
+        }
+
+        if (brickMap.constructor !== BrickMap) {
+            throw new Error('The target brick map instance is invalid');
+        }
+
+        while (diffs.length) {
+            const brickMapDiff = diffs.shift();
+
+            // If the diff is a whole BrickMap object
+            // use it as a target for the next diffs
+            // and discard the previous history because
+            // it will already have all the previous changes
+            if (brickMapDiff.constructor === BrickMap) {
+                brickMap = brickMapDiff;
+                continue;
+            }
+
+            brickMap.applyDiff(brickMapDiff);
+        }
+
+        return brickMap;
+    };
+
+    this.initialize(options);
 }
+
+module.exports = LatestVersionStrategy;
+
+},{"../../lib/Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","../BrickMap":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMap.js","../BrickMapDiff":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapDiff.js","./BrickMapStrategyMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\BrickMapStrategyMixin.js","swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\bultinBrickMapStrategies.js":[function(require,module,exports){
+module.exports = {
+    DIFF: 'Diff',
+    LATEST_VERSION: 'LatestVersion'
+}
+
 },{}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\index.js":[function(require,module,exports){
 /**
  * @param {object} options
  */
 function Factory(options) {
     const DiffStrategy = require('./DiffStrategy');
+    const LastestVersionStrategy = require('./LatestVersionStrategy');
 
     options = options || {};
 
@@ -4012,6 +4385,7 @@ function Factory(options) {
     const initialize = () => {
         const builtinStrategies = require("./bultinBrickMapStrategies");
         this.registerStrategy(builtinStrategies.DIFF, this.createDiffStrategy);
+        this.registerStrategy(builtinStrategies.LATEST_VERSION, this.createLatestVersionStrategy);
     }
 
     ////////////////////////////////////////////////////////////
@@ -4045,18 +4419,29 @@ function Factory(options) {
         return new DiffStrategy(options);
     }
 
+    /**
+     * @param {object} options
+     * @return {LastestVersionStrategy}
+     */
+    this.createLatestVersionStrategy = (options) => {
+        return new LastestVersionStrategy(options);
+    }
+
     initialize();
 }
 
 module.exports = Factory;
 
-},{"./DiffStrategy":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\DiffStrategy.js","./bultinBrickMapStrategies":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\bultinBrickMapStrategies.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickStorageService\\Service.js":[function(require,module,exports){
+},{"./DiffStrategy":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\DiffStrategy.js","./LatestVersionStrategy":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\LatestVersionStrategy.js","./bultinBrickMapStrategies":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickMapStrategy\\bultinBrickMapStrategies.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickStorageService\\Service.js":[function(require,module,exports){
 (function (Buffer){(function (){
 'use strict';
 
 const envTypes = require("overwrite-require").constants;
 const isStream = require("../../utils/isStream");
 const stream = require('stream');
+const utils = require("swarmutils");
+
+const HASHLINK_EMBEDDED_HINT_PREFIX = 'embedded/';
 
 /**
  * Brick storage layer
@@ -4066,7 +4451,7 @@ const stream = require('stream');
  * @param {Cache} options.cache
  * @param {number} options.bufferSize
  * @param {EDFSBrickStorage} options.storageProvider
- * @param {callback} options.brickFactoryCallback
+ * @param {callback} options.brickFactoryFunction
  * @param {FSAdapter} options.fsAdapter
  * @param {callback} options.brickDataExtractorCallback
  */
@@ -4075,10 +4460,12 @@ function Service(options) {
     this.cache = options.cache;
     this.bufferSize = parseInt(options.bufferSize, 10);
     this.storageProvider = options.storageProvider;
-    this.brickFactoryCallback = options.brickFactoryCallback;
+    this.brickFactoryFunction = options.brickFactoryFunction;
     this.fsAdapter = options.fsAdapter;
     this.brickDataExtractorCallback = options.brickDataExtractorCallback;
     this.keySSI = options.keySSI;
+
+    const SSIKeys = require("opendsu").loadApi("keyssi");
 
     if (isNaN(this.bufferSize) || this.bufferSize < 1) {
         throw new Error('Buffer size is required');
@@ -4088,8 +4475,8 @@ function Service(options) {
         throw new Error('Storage provider is required');
     }
 
-    if (typeof this.brickFactoryCallback !== 'function') {
-        throw new Error('A brick factory callback is required');
+    if (typeof this.brickFactoryFunction !== 'function') {
+        throw new Error('A brick factory function is required');
     }
 
     if (!this.fsAdapter && $$.environmentType !== envTypes.BROWSER_ENVIRONMENT_TYPE && $$.environmentType !== envTypes.SERVICE_WORKER_ENVIRONMENT_TYPE) {
@@ -4099,6 +4486,19 @@ function Service(options) {
     if (typeof this.brickDataExtractorCallback !== 'function') {
         throw new Error('A Brick data extractor callback is required');
     }
+
+    /**
+     * @param {HashLinkSSI} hlSSI
+     * @return {HashLinkSSI}
+     */
+    const stripHintFromHashLinkSSI = (hlSSI) => {
+        return SSIKeys.buildHashLinkSSI(
+            hlSSI.getDLDomain(),
+            hlSSI.getSpecificString(),
+            hlSSI.getControl(),
+            hlSSI.getVn()
+        ).getIdentifier();
+    };
 
     /**
      * @param {*} key
@@ -4203,8 +4603,7 @@ function Service(options) {
             const self = this;
             readableStream.getBrick = function (brickIndex) {
                 const brickMeta = bricksMeta[brickIndex];
-                const keyssi = require("opendsu").loadApi("keyssi");
-                const hlSSI = keyssi.parse(brickMeta.hashLink);
+                const hlSSI = SSIKeys.parse(brickMeta.hashLink);
                 self.getBrick(hlSSI, (err, brick) => {
                     if (err) {
                         this.destroy(err);
@@ -4235,6 +4634,64 @@ function Service(options) {
     };
 
     /**
+     * @param {HashLinkSSI} hlSSI
+     * @return {boolean}
+     */
+    const hashLinkHasEmbeddedHint = (hlSSI) => {
+        const hlSSIHint = hlSSI.getHint();
+        return (hlSSIHint && hlSSIHint.indexOf(HASHLINK_EMBEDDED_HINT_PREFIX) === 0)
+    }
+
+    /**
+     * Extract an embedded Brick from an unencrypted Brick container
+     * @param {HashLinkSSI} hlSSI
+     * @param {object} brickMeta
+     * @param {callback} callback
+     */
+    const getEmbeddedBrickAsBuffer = (hlSSI, brickMeta, callback) => {
+        const hlSSIHint = hlSSI.getHint();
+        const hintSegments = hlSSIHint.split('/').pop();
+        let [ offset, size, embeddedHlSSI ] = hintSegments.split(',');
+
+        offset = parseInt(offset, 10);
+        size = parseInt(size, 10);
+
+        if (isNaN(offset) || isNaN(size) || !embeddedHlSSI) {
+            return callback(new Error(`Embedded hint is invalid. Expected offset,size,hlSSI and got: ${hintSegments}`));
+        }
+
+        const cacheKey = embeddedHlSSI;
+
+        if (hasInCache(cacheKey)) {
+            const data = this.cache.get(cacheKey);
+            return callback(undefined, data);
+        }
+
+        const containerBrickMeta = Object.assign({}, brickMeta);
+        // The container Brick is not encrypted
+        delete containerBrickMeta.key;
+        // The container Brick doesn't need the hint
+        containerBrickMeta.hashLink = stripHintFromHashLinkSSI(hlSSI);
+
+        // Get the container Brick data
+        getBrickAsBuffer(containerBrickMeta, (err, data) => {
+            if (err) {
+                return callback(err);
+            }
+
+            const brickData = data.slice(offset, offset + size);
+            return this.brickDataExtractorCallback(brickMeta, createBrick(brickData), (err, data) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                storeInCache(cacheKey, data);
+                return callback(undefined, data);
+            });
+        });
+    }
+
+    /**
      * Retrieves a Brick from storage and converts
      * it into a Buffer
      *
@@ -4242,13 +4699,18 @@ function Service(options) {
      * @param {callback} callback
      */
     const getBrickAsBuffer = (brickMeta, callback) => {
-        if (hasInCache(brickMeta.hashLink)) {
-            const data = this.cache.get(brickMeta.hashLink);
+        const hlSSI = SSIKeys.parse(brickMeta.hashLink);
+
+        if (hashLinkHasEmbeddedHint(hlSSI)) {
+            return getEmbeddedBrickAsBuffer(hlSSI, brickMeta, callback);
+        }
+
+        let cacheKey = brickMeta.hashLink;
+        if (hasInCache(cacheKey)) {
+            const data = this.cache.get(cacheKey);
             return callback(undefined, data);
         }
 
-        const keyssi = require("opendsu").loadApi("keyssi");
-        const hlSSI = keyssi.parse(brickMeta.hashLink);
         this.getBrick(hlSSI, (err, brickData) => {
             if (err) {
                 return callback(err);
@@ -4259,12 +4721,11 @@ function Service(options) {
                     return callback(err);
                 }
 
-                storeInCache(brickMeta.hashLink, data);
-                callback(undefined, data);
+                storeInCache(cacheKey, data);
+                return callback(undefined, data);
             });
         });
     };
-
 
     /**
      * Counts the number of blocks in a file
@@ -4292,10 +4753,15 @@ function Service(options) {
      * and saves it into brick storage
      *
      * @param {Buffer} data
-     * @param {callback} callback
+     * @param {boolean|callback} encrypt Defaults to `true`
+     * @param {callback|undefined} callback
      */
-    const convertDataBlockToBrick = (data, callback) => {
-        const brick = this.brickFactoryCallback();
+    const convertDataBlockToBrick = (data, encrypt, callback) => {
+        if (typeof encrypt === 'function') {
+            callback = encrypt;
+            encrypt = true;
+        }
+        const brick = this.brickFactoryFunction(encrypt);
         brick.setRawData(data);
         brick.getTransformedData((err, brickData) => {
             if (err) {
@@ -4327,18 +4793,21 @@ function Service(options) {
      * @param {Array<object>} resultContainer
      * @param {Buffer} buffer
      * @param {number} blockIndex
-     * @param {number} blockSize
+     * @param {object} options
+     * @param {number} options.bufferSize
      * @param {callback} callback
      */
-    const convertBufferToBricks = (resultContainer, buffer, blockIndex, blockSize, callback) => {
-        let blocksCount = Math.floor(buffer.length / blockSize);
-        if ((buffer.length % blockSize) > 0) {
+    const convertBufferToBricks = (resultContainer, buffer, blockIndex, options, callback) => {
+        const bufferSize = options.bufferSize;
+        let blocksCount = Math.floor(buffer.length / bufferSize);
+        if ((buffer.length % bufferSize) > 0) {
             ++blocksCount;
         }
 
-        const blockData = buffer.slice(blockIndex * blockSize, (blockIndex + 1) * blockSize);
+        const encrypt = (typeof options.encrypt === 'undefined') ? true : options.encrypt;
+        const blockData = buffer.slice(blockIndex * bufferSize, (blockIndex + 1) * bufferSize);
 
-        convertDataBlockToBrick(blockData, (err, result) => {
+        convertDataBlockToBrick(blockData, encrypt, (err, result) => {
             if (err) {
                 return callback(err);
             }
@@ -4347,7 +4816,7 @@ function Service(options) {
             ++blockIndex;
 
             if (blockIndex < blocksCount) {
-                return convertBufferToBricks(resultContainer, buffer, blockIndex, blockSize, callback);
+                return convertBufferToBricks(resultContainer, buffer, blockIndex, options, callback);
             }
 
             return callback();
@@ -4359,17 +4828,26 @@ function Service(options) {
      *
      * @param {Array<object>} resultContainer
      * @param {string} filePath
-     * @param {number} blockIndex
-     * @param {number} blocksCount
+     * @param {object} options
+     * @param {number} options.blockIndex
+     * @param {number} options.blocksCount
+     * @param {boolean} options.encrypt
      * @param {callback} callback
      */
-    const convertFileToBricks = (resultContainer, filePath, blockIndex, blocksCount, callback) => {
-        if (typeof blocksCount === 'function') {
-            callback = blocksCount;
-            blocksCount = blockIndex;
-            blockIndex = 0;
+    const convertFileToBricks = (resultContainer, filePath, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            }
         }
 
+        if (typeof options.blockIndex === 'undefined') {
+            options.blockIndex = 0;
+        }
+
+        let blockIndex = options.blockIndex;
+        const blocksCount = options.blocksCount;
         const blockOffset = blockIndex * this.bufferSize;
         const blockEndOffset = (blockIndex + 1) * this.bufferSize - 1;
         this.fsAdapter.readBlockFromFile(filePath, blockOffset, blockEndOffset, (err, data) => {
@@ -4377,7 +4855,7 @@ function Service(options) {
                 return callback(err);
             }
 
-            convertDataBlockToBrick(data, (err, result) => {
+            convertDataBlockToBrick(data, options.encrypt, (err, result) => {
                 if (err) {
                     return callback(err);
                 }
@@ -4386,7 +4864,8 @@ function Service(options) {
                 ++blockIndex;
 
                 if (blockIndex < blocksCount) {
-                    return convertFileToBricks(resultContainer, filePath, blockIndex, blocksCount, callback);
+                    options.blockIndex = blockIndex;
+                    return convertFileToBricks(resultContainer, filePath, options, callback);
                 }
 
                 return callback();
@@ -4395,20 +4874,72 @@ function Service(options) {
     };
 
     /**
+     * Save the buffer containing multiple files as a single brick
+     * and generate the proper HashLinkSSI for each file in the brick
+     *
+     * Each file's HashLinkSSI is constructed by appending the `embedded/${offset},${size}` hint
+     * at the end of the Brick's HashLinkSSI. Ex:
+     * Brick HashLinkSSI:
+     *      ssi:hl:default:29LuHPtSrCG7u4nKNPB8KbG2EuK1U84X5pTTTko2GGcpxZGyPFC1jG8hAh6g2DbYKJxYumJFmNyQWu3iNpQe5jHR::v0
+     * File in brick HashLinkSSI:
+     *      ssi:hl:default:29LuHPtSrCG7u4nKNPB8KbG2EuK1U84X5pTTTko2GGcpxZGyPFC1jG8hAh6g2DbYKJxYumJFmNyQWu3iNpQe5jHR::v0:embedded/0,5
+     *
+     * @param {Buffer} buffer
+     * @param {Array<Object>} filesList
+     * @param {string} filesList[].filename
+     * @param {Number} filesList[].offset
+     * @param {Number} filesList[].size
+     * @param {callback} callback
+     */
+    const storeCompactedFiles = (buffer, filesList, callback) => {
+        return convertDataBlockToBrick(buffer, false, (err, brickMeta) => {
+            if (err) {
+                return callback(err);
+            }
+            const files = {};
+            const brickHLSSI = SSIKeys.parse(brickMeta.hashLink);
+
+            for (const fileInfo of filesList) {
+                const fileHLSSIHint = `${HASHLINK_EMBEDDED_HINT_PREFIX}${fileInfo.offset},${fileInfo.size},${fileInfo.brickSummary.hashLink}`;
+
+                const fileHLSSI = SSIKeys.buildHashLinkSSI(
+                    brickHLSSI.getDLDomain(),
+                    brickHLSSI.getSpecificString(),
+                    brickHLSSI.getControl(),
+                    brickHLSSI.getVn(),
+                    fileHLSSIHint
+                );
+                fileInfo.brickSummary.hashLink = fileHLSSI.getIdentifier();
+                files[fileInfo.filename] = [fileInfo.brickSummary];
+            }
+
+            return callback(undefined, files);
+        });
+    }
+
+    /**
      * Stores a Buffer as Bricks into brick storage
      *
      * @param {Buffer} buffer
-     * @param {number|callback} bufferSize
+     * @param {objects|callback} options
+     * @param {number|callback} options.bufferSize
      * @param {callback|undefined} callback
      */
-    this.ingestBuffer = (buffer, bufferSize, callback) => {
-        if (typeof bufferSize === 'function') {
-            callback = bufferSize;
-            bufferSize = this.bufferSize;
+    this.ingestBuffer = (buffer, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            }
         }
+
+        if (!options.bufferSize) {
+            options.bufferSize = this.bufferSize;
+        }
+
         const bricksSummary = [];
 
-        convertBufferToBricks(bricksSummary, buffer, 0, bufferSize, (err) => {
+        convertBufferToBricks(bricksSummary, buffer, 0, options, (err) => {
             if (err) {
                 return callback(err);
             }
@@ -4422,9 +4953,18 @@ function Service(options) {
      * stored in brick storage
      *
      * @param {stream.Readable} stream
+     * @param {object|callback} options
+     * @param {boolean} options.encrypt
      * @param {callback}
      */
-    this.ingestStream = (stream, callback) => {
+    this.ingestStream = (stream, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            };
+        }
+
         let bricksSummary = [];
         let receivedData = [];
         stream.on('data', (chunk) => {
@@ -4437,7 +4977,11 @@ function Service(options) {
             if (receivedData.length >= noChunks) {
                 const buffer = Buffer.concat(receivedData.splice(0, noChunks));
                 stream.pause();
-                this.ingestBuffer(buffer, buffer.length, (err, summary) => {
+                const ingestBufferOptions = {
+                    bufferSize: buffer.length,
+                    encrypt: options.encrypt
+                };
+                this.ingestBuffer(buffer, ingestBufferOptions, (err, summary) => {
                     if (err) {
                         stream.destroy(err);
                         return;
@@ -4452,7 +4996,11 @@ function Service(options) {
         });
         stream.on('end', () => {
             const buffer = Buffer.concat(receivedData);
-            this.ingestBuffer(buffer, buffer.length, (err, summary) => {
+            const ingestBufferOptions = {
+                bufferSize: buffer.length,
+                encrypt: options.encrypt
+            };
+            this.ingestBuffer(buffer, ingestBufferOptions, (err, summary) => {
                 if (err) {
                     return callback(err);
                 }
@@ -4467,9 +5015,16 @@ function Service(options) {
      * @param {string|Buffer|stream.Readable} data
      * @param {callback} callback
      */
-    this.ingestData = (data, callback) => {
+    this.ingestData = (data, options, callback) => {
         if (typeof data === 'string') {
             data = Buffer.from(data);
+        }
+
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true,
+            };
         }
 
         if (!Buffer.isBuffer(data) && !isStream.isReadable(data)) {
@@ -4477,19 +5032,27 @@ function Service(options) {
         }
 
         if (Buffer.isBuffer(data)) {
-            return this.ingestBuffer(data, callback);
+            return this.ingestBuffer(data, options, callback);
         }
 
-        return this.ingestStream(data, callback);
+        return this.ingestStream(data, options, callback);
     };
 
     /**
      * Copy the contents of a file into brick storage
      *
      * @param {string} filePath
+     * @param {object|callback} options
+     * @param {boolean} options.encrypt
      * @param {callback} callback
      */
-    this.ingestFile = (filePath, callback) => {
+    this.ingestFile = (filePath, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            }
+        }
         const bricksSummary = [];
 
         getFileBlocksCount(filePath, (err, blocksCount) => {
@@ -4497,7 +5060,9 @@ function Service(options) {
                 return callback(err);
             }
 
-            convertFileToBricks(bricksSummary, filePath, blocksCount, (err, result) => {
+            const conversionOptions = Object.assign({}, options);
+            conversionOptions.blocksCount = blocksCount;
+            convertFileToBricks(bricksSummary, filePath, conversionOptions, (err, result) => {
                 if (err) {
                     return callback(err);
                 }
@@ -4511,9 +5076,18 @@ function Service(options) {
      * Copy the contents of multiple files into brick storage
      *
      * @param {Array<string>} filePath
+     * @param {object|callback} options
+     * @param {boolean} options.encrypt
      * @param {callback} callback
      */
-    this.ingestFiles = (files, callback) => {
+    this.ingestFiles = (files, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            }
+        }
+
         const bricksSummary = {};
 
         const ingestFilesRecursive = (files, callback) => {
@@ -4524,7 +5098,7 @@ function Service(options) {
             const filePath = files.pop();
             const filename = require("path").basename(filePath);
 
-            this.ingestFile(filePath, (err, result) => {
+            this.ingestFile(filePath, options, (err, result) => {
                 if (err) {
                     return callback(err);
                 }
@@ -4539,12 +5113,156 @@ function Service(options) {
     };
 
     /**
+     * Copy the contents of folder into a single brick
+     *
+     * @param {string} folderPath
+     * @param {object|callback} options
+     * @param {boolean} options.encrypt
+     * @param {callback} callback
+     */
+    this.createBrickFromFolder = (folderPath, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            }
+        }
+        const filesIterator = this.fsAdapter.getFilesIterator(folderPath);
+        const filesList = [];
+
+        let buffer = Buffer.alloc(0);
+        let currentOffset = 0;
+
+        const iteratorHandler = (err, filename, dirname) => {
+            if (err) {
+                return callback(err);
+            }
+
+            if (typeof filename === 'undefined') {
+                return storeCompactedFiles(buffer, filesList, callback);
+            }
+
+            const filePath = require("path").join(dirname, filename);
+            this.readFile(filePath, (err, fileBuffer) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                const fileBrick = this.brickFactoryFunction(options.encrypt);
+                fileBrick.setRawData(fileBuffer);
+                fileBrick.getTransformedData((err, brickData) => {
+                    if (err) {
+                        return callback(err);
+                    }
+
+                    fileBrick.getSummary((err, brickSummary) => {
+                        if (err) {
+                            return callback(err);
+                        }
+
+                        const size = brickData.length;
+                        const offset = currentOffset;
+
+                        currentOffset += size;
+                        filesList.push({
+                            filename,
+                            offset,
+                            size,
+                            brickSummary
+                        });
+                        buffer = Buffer.concat([buffer, brickData]);
+
+                        filesIterator.next(iteratorHandler);
+                    })
+                });
+            });
+        };
+
+        filesIterator.next(iteratorHandler);
+
+    };
+
+    /**
+     * Copy the contents of multiple files into a single brick
+     *
+     * @param {string} folderPath
+     * @param {object|callback} options
+     * @param {boolean} options.encrypt
+     * @param {callback} callback
+     */
+    this.createBrickFromFiles = (files, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            }
+        }
+        const filesList = [];
+
+        let buffer = Buffer.alloc(0);
+        let currentOffset = 0;
+
+        const readFilesRecursive = (files, callback) => {
+            if (!files.length) {
+                return storeCompactedFiles(buffer, filesList, callback);
+            }
+
+            const filePath = files.pop();
+            const filename = require("path").basename(filePath);
+
+            this.readFile(filePath, (err, fileBuffer) => {
+                if (err) {
+                    return callback(err);
+                }
+
+                const fileBrick = this.brickFactoryFunction(options.encrypt);
+                fileBrick.setRawData(fileBuffer);
+                fileBrick.getTransformedData((err, brickData) => {
+                    if (err) {
+                        return callback(err);
+                    }
+
+                    fileBrick.getSummary((err, brickSummary) => {
+                        if (err) {
+                            return callback(err);
+                        }
+
+                        const size = brickData.length;
+                        const offset = currentOffset;
+
+                        currentOffset += size;
+                        filesList.push({
+                            filename,
+                            offset,
+                            size,
+                            brickSummary
+                        });
+                        buffer = Buffer.concat([buffer, brickData]);
+
+                        readFilesRecursive(files, callback);
+                    });
+                });
+            });
+        }
+
+        readFilesRecursive(files, callback);
+    };
+
+    /**
      * Copy the contents of folder into brick storage
      *
      * @param {string} folderPath
+     * @param {object|callback} options
+     * @param {boolean} options.encrypt
      * @param {callback} callback
      */
-    this.ingestFolder = (folderPath, callback) => {
+    this.ingestFolder = (folderPath, options, callback) => {
+        if (typeof options === 'function') {
+            callback = options;
+            options = {
+                encrypt: true
+            };
+        }
         const bricksSummary = {};
         const filesIterator = this.fsAdapter.getFilesIterator(folderPath);
 
@@ -4558,7 +5276,7 @@ function Service(options) {
             }
 
             const filePath = require("path").join(dirname, filename);
-            this.ingestFile(filePath, (err, result) => {
+            this.ingestFile(filePath, options, (err, result) => {
                 if (err) {
                     return callback(err);
                 }
@@ -4589,6 +5307,10 @@ function Service(options) {
                     return callback(err);
                 }
 
+
+                if (!Buffer.isBuffer(data) && (data instanceof ArrayBuffer || ArrayBuffer.isView(decryptionKey))) {
+                    data = utils.convertToBuffer(data);
+                }
                 buffer = Buffer.concat([buffer, data]);
                 ++index;
 
@@ -4731,6 +5453,23 @@ function Service(options) {
     };
 
     /**
+     * @param {string} filePath
+     * @param {callback} callback
+     */
+    this.readFile = (filePath, callback) => {
+        this.fsAdapter.getFileSize(filePath, (err, size) => {
+            if (err) {
+                return callback(err);
+            }
+
+            if (!size) {
+                size = 1;
+            }
+            this.fsAdapter.readBlockFromFile(filePath, 0, size - 1, callback);
+        });
+    };
+
+    /**
      * @param {string} keySSI
      * @param {callback} callback
      */
@@ -4777,7 +5516,7 @@ module.exports = Service;
 
 }).call(this)}).call(this,require("buffer").Buffer)
 
-},{"../../utils/isStream":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\utils\\isStream.js","../Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","buffer":false,"opendsu":false,"overwrite-require":"overwrite-require","path":false,"stream":false}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickStorageService\\index.js":[function(require,module,exports){
+},{"../../utils/isStream":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\utils\\isStream.js","../Brick":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\Brick.js","buffer":false,"opendsu":false,"overwrite-require":"overwrite-require","path":false,"stream":false,"swarmutils":"swarmutils"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\BrickStorageService\\index.js":[function(require,module,exports){
 'use strict'
 
 module.exports = {
@@ -5583,16 +6322,15 @@ module.exports = CompressionGenerator;
 },{"zlib":false}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\bar\\lib\\transforms\\EncryptionGenerator.js":[function(require,module,exports){
 const openDSU = require("opendsu");
 const crypto = openDSU.loadApi("crypto");
-const keyssi = openDSU.loadApi("keyssi");
+const keyssiSpace = openDSU.loadApi("keyssi");
 
 function EncryptionGenerator(keySSI) {
-    let key;
     this.setKeySSI = (newConfig) => {
         keySSI = newConfig;
     };
 
     this.createDirectTransform = (transformParameters, callback) => {
-        getEncryption(transformParameters, callback);
+        createBrickEncryptionTransformation(transformParameters, callback);
     };
 
     this.createInverseTransform = (transformParameters, callback) => {
@@ -5600,43 +6338,37 @@ function EncryptionGenerator(keySSI) {
     };
 
     //--------------------------------------- internal methods ------------------------------------------------------
-    function getEncryption(transformParameters, callback) {
-        const _createResult = (key) => {
+    function createBrickEncryptionTransformation(transformParameters, callback) {
+        const _createResult = (_keySSI) => {
             //const _keySSI = keyssi.buildTemplateKeySSI(keySSI.getName(), keySSI.getDLDomain(), key, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
-            const _keySSI = keySSI.clone();
-            _keySSI.load(keySSI.getName(), keySSI.getDLDomain(), key, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
+            // _keySSI.load(keySSI.getName(), keySSI.getDLDomain(), key, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
             return {
                 transform(data, callback) {
                     crypto.encrypt(_keySSI, data, callback);
                 },
                 transformParameters: {
-                    key
+                    key: _keySSI.getIdentifier()
                 }
             }
         }
-
+        let seKeySSI;
         if (transformParameters && transformParameters.key) {
-            key = transformParameters.key;
-            callback(undefined, _createResult(key));
+            seKeySSI = keyssiSpace.parse(transformParameters.key);
         } else {
-            crypto.generateEncryptionKey(keySSI, (err, encryptionKey) => {
-                if (err) {
-                    return callback(err);
-                }
-
-                key = encryptionKey;
-                callback(undefined, _createResult(key));
-            });
+            seKeySSI = keyssiSpace.buildSymmetricalEncryptionSSI(keySSI.getDLDomain(), undefined, '', keySSI.getVn());
         }
+
+        callback(undefined, _createResult(seKeySSI));
     }
 
 
     function getDecryption(transformParameters, callback) {
         const ret = {
-            transform(data, callback){
+            transform(data, callback) {
                 //const _keySSI = keyssi.buildTemplateKeySSI(keySSI.getName(), keySSI.getDLDomain(), transformParameters.key, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
-                const _keySSI = keySSI.clone();
-                _keySSI.load(keySSI.getName(), keySSI.getDLDomain(), transformParameters.key, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
+                // const _keySSI = keySSI.clone();
+                // _keySSI.load(keySSI.getName(), keySSI.getDLDomain(), transformParameters.key, keySSI.getControl(), keySSI.getVn(), keySSI.getHint());
+                const _keySSI = keyssiSpace.parse(transformParameters.key);
                 crypto.decrypt(_keySSI, data, callback);
             }
         }
@@ -6836,7 +7568,6 @@ function BootstrapingService(options) {
         'brickStorage': openDSU.loadApi("bricking"),
         'anchorService': openDSU.loadApi("anchoring")
     }
-    const bdns = openDSU.loadApi("bdns");
 
     ////////////////////////////////////////////////////////////
     // Private methods
@@ -6895,7 +7626,6 @@ module.exports = BootstrapingService;
 /**
  * @param {object} options
  * @param {BootstrapingService} options.bootstrapingService
- * @param {string} options.dlDomain
  * @param {KeySSIFactory} options.keySSIFactory
  * @param {BrickMapStrategyFactory} options.brickMapStrategyFactory
  */
@@ -6905,7 +7635,6 @@ function ConstDSUFactory(options) {
 
     /**
      * @param {object} options
-     * @param {string} options.favouriteEndpoint
      * @param {string} options.brickMapStrategy 'Diff', 'Versioned' or any strategy registered with the factory
      * @param {object} options.anchoringOptions Anchoring options to pass to bar map strategy
      * @param {callback} options.anchoringOptions.decisionFn Callback which will decide when to effectively anchor changes
@@ -6959,8 +7688,7 @@ module.exports = ConstDSUFactory;
 /**
  * @param {object} options
  * @param {BootstrapingService} options.bootstrapingService
- * @param {string} options.dlDomain
- * @param {DIDFactory} options.keySSIFactory
+ * @param {KeySSIFactory} options.keySSIFactory
  * @param {BrickMapStrategyFactory} options.brickMapStrategyFactory
  */
 const cache = require('psk-cache').factory();
@@ -6968,7 +7696,7 @@ function DSUFactory(options) {
     const barModule = require('bar');
     const fsAdapter = require('bar-fs-adapter');
 
-    const DEFAULT_BRICK_MAP_STRATEGY = "Diff";
+    const DEFAULT_BRICK_MAP_STRATEGY = "LatestVersion";
 
     options = options || {};
     this.bootstrapingService = options.bootstrapingService;
@@ -6980,7 +7708,7 @@ function DSUFactory(options) {
     ////////////////////////////////////////////////////////////
 
     /**
-     * @param {BaseDID} keySSI
+     * @param {SeedSSI} keySSI
      * @param {object} options
      * @return {Archive}
      */
@@ -7054,7 +7782,6 @@ function DSUFactory(options) {
 
     /**
      * @param {object} options
-     * @param {string} options.favouriteEndpoint
      * @param {string} options.brickMapStrategy 'Diff', 'Versioned' or any strategy registered with the factory
      * @param {object} options.anchoringOptions Anchoring options to pass to bar map strategy
      * @param {callback} options.anchoringOptions.decisionFn Callback which will decide when to effectively anchor changes
@@ -7112,7 +7839,6 @@ module.exports = DSUFactory;
 /**
  * @param {object} options
  * @param {BootstrapingService} options.bootstrapingService
- * @param {string} options.dlDomain
  * @param {KeySSIFactory} options.keySSIFactory
  * @param {BrickMapStrategyFactory} options.brickMapStrategyFactory
  */
@@ -7122,7 +7848,6 @@ function WalletFactory(options) {
 
     /**
      * @param {object} options
-     * @param {string} options.favouriteEndpoint
      * @param {string} options.brickMapStrategy 'Diff', 'Versioned' or any strategy registered with the factory
      * @param {object} options.anchoringOptions Anchoring options to pass to bar map strategy
      * @param {callback} options.anchoringOptions.decisionFn Callback which will decide when to effectively anchor changes
@@ -7206,11 +7931,10 @@ module.exports = WalletFactory;
 
 },{}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\index.js":[function(require,module,exports){
 const BarFactory = require('./DSUFactory');
-
+const SSITypes = require("../KeySSIs/SSITypes");
 /**
  * @param {object} options
  * @param {BootstrapingService} options.bootstrapingService
- * @param {string} options.dlDomain
  * @param {KeySSIFactory} options.keySSIFactory
  * @param {BrickMapStrategyFactory} options.brickMapStrategyFactory
  */
@@ -7245,14 +7969,15 @@ function Registry(options) {
             brickMapStrategyFactory
         });
 
-        this.registerDSUType("seed", barFactory);
+        this.registerDSUType(SSITypes.SEED_SSI, barFactory);
+        this.registerDSUType(SSITypes.SREAD_SSI, barFactory);
         const WalletFactory = require("./WalletFactory");
         const walletFactory = new WalletFactory({barFactory});
-        this.registerDSUType("wallet", walletFactory);
+        this.registerDSUType(SSITypes.WALLET_SSI, walletFactory);
         const ConstDSUFactory = require("./ConstDSUFactory");
         const constDSUFactory = new ConstDSUFactory({barFactory});
-        this.registerDSUType("const", constDSUFactory);
-        this.registerDSUType("array", constDSUFactory);
+        this.registerDSUType(SSITypes.CONST_SSI, constDSUFactory);
+        this.registerDSUType(SSITypes.ARRAY_SSI, constDSUFactory);
     }
 
     ////////////////////////////////////////////////////////////
@@ -7271,7 +7996,6 @@ function Registry(options) {
     /**
      * @param {object} keySSI
      * @param {object} dsuConfiguration
-     * @param {string} dsuConfiguration.favouriteEndpoint
      * @param {string} dsuConfiguration.brickMapStrategyFactory 'Diff', 'Versioned' or any strategy registered with the factory
      * @param {object} dsuConfiguration.anchoringOptions Anchoring options to pass to bar map strategy
      * @param {callback} dsuConfiguration.anchoringOptions.decisionFn Callback which will decide when to effectively anchor changes
@@ -7334,7 +8058,8 @@ Registry.prototype.getDSUFactory = (dsuType) => {
 }
 
 module.exports = Registry;
-},{"./ConstDSUFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\ConstDSUFactory.js","./DSUFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\DSUFactory.js","./WalletFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\WalletFactory.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\mixins\\DSUBase.js":[function(require,module,exports){
+
+},{"../KeySSIs/SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./ConstDSUFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\ConstDSUFactory.js","./DSUFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\DSUFactory.js","./WalletFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\WalletFactory.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\mixins\\DSUBase.js":[function(require,module,exports){
 module.exports = function(archive){
 	archive.call = (functionName, ...args) => {
 		if(args.length === 0){
@@ -7370,11 +8095,10 @@ module.exports = function(archive){
 	}
 	return archive;
 }
+
 },{"overwrite-require":"overwrite-require"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIResolver.js":[function(require,module,exports){
-const constants = require('./constants');
 const defaultBootStrapingService = require("./BootstrapingService");
 /**
- * @param {string} options.dlDomain
  * @param {BoostrapingService} options.bootstrapingService
  * @param {BrickMapStrategyFactory} options.brickMapStrategyFactory
  * @param {DSUFactory} options.dsuFactory
@@ -7383,7 +8107,6 @@ function KeySSIResolver(options) {
     options = options || {};
 
     const bootstrapingService = options.bootstrapingService || defaultBootStrapingService;
-    const dlDomain = options.dlDomain || constants.DEFAULT_DOMAIN;
 
     if (!bootstrapingService) {
         throw new Error('BootstrapingService is required');
@@ -7399,9 +8122,8 @@ function KeySSIResolver(options) {
     ////////////////////////////////////////////////////////////
 
     /**
-     * @param {string} dsuRepresentation
+     * @param {SeedSSI} dsuRepresentation
      * @param {object} options
-     * @param {string} options.favouriteEndpoint
      * @param {string} options.brickMapStrategy 'Diff' or any strategy registered with the factory
      * @param {object} options.anchoringOptions Anchoring options to pass to bar map strategy
      * @param {callback} options.anchoringOptions.decisionFn A function which will decide when to effectively anchor changes
@@ -7410,7 +8132,7 @@ function KeySSIResolver(options) {
      *                                                              The default strategy is to reload the BrickMap and then apply the new changes
      * @param {callback} options.anchoringOptions.anchoringEventListener An event listener which is called when the strategy anchors the changes
      * @param {callback} options.anchoringOptions.signingFn  A function which will sign the new alias
-     * @param {object} options.validationRules 
+     * @param {object} options.validationRules
      * @param {object} options.validationRules.preWrite An object capable of validating operations done in the "preWrite" stage of the BrickMap
      * @param {callback} callback
      */
@@ -7425,7 +8147,6 @@ function KeySSIResolver(options) {
 
     /**
      * @param {string} keySSI
-     * @param {string} dsuRepresentation
      * @param {object} options
      * @param {string} options.brickMapStrategy 'Diff', 'Versioned' or any strategy registered with the factory
      * @param {object} options.anchoringOptions Anchoring options to pass to bar map strategy
@@ -7435,7 +8156,7 @@ function KeySSIResolver(options) {
      *                                                              The default strategy is to reload the BrickMap and then apply the new changes
      * @param {callback} options.anchoringOptions.anchoringEventListener An event listener which is called when the strategy anchors the changes
      * @param {callback} options.anchoringOptions.signingFn  A function which will sign the new alias
-     * @param {object} options.validationRules 
+     * @param {object} options.validationRules
      * @param {object} options.validationRules.preWrite An object capable of validating operations done in the "preWrite" stage of the BrickMap
      * @param {callback} callback
      */
@@ -7476,36 +8197,37 @@ function KeySSIResolver(options) {
 
 module.exports = KeySSIResolver;
 
-},{"./BootstrapingService":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\BootstrapingService\\index.js","./constants":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\constants.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\ArraySSI.js":[function(require,module,exports){
+},{"./BootstrapingService":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\BootstrapingService\\index.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\ArraySSI.js":[function(require,module,exports){
 function ArraySSI(identifier) {
     const SSITypes = require("../SSITypes");
     const KeySSIMixin = require("../KeySSIMixin");
     const cryptoRegistry = require("../CryptoAlgorithmsRegistry");
 
     KeySSIMixin(this);
+    const self = this;
 
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.getName = () => {
+    self.getName = () => {
         return SSITypes.ARRAY_SSI;
     };
 
-    this.initialize = (dlDomain, arr,   vn, hint) => {
-        this.load(SSITypes.ARRAY_SSI, dlDomain, cryptoRegistry.getKeyDerivationFunction(this)(arr.join(''), 1000), "", vn, hint);
+    self.initialize = (dlDomain, arr, vn, hint) => {
+        const key = cryptoRegistry.getKeyDerivationFunction(self)(arr.join(''), 1000);
+        self.load(SSITypes.ARRAY_SSI, dlDomain, cryptoRegistry.getEncodingFunction(self)(key), "", vn, hint);
     };
 
-    this.derive = () => {
+    self.derive = () => {
         const ConstSSI = require("./ConstSSI");
         const constSSI = ConstSSI.createConstSSI();
-        constSSI.load(SSITypes.CONST_SSI, this.getDLDomain(), getEncryptionKey(), this.getControl(), this.getVn(), this.getHint());
+        constSSI.load(SSITypes.CONST_SSI, self.getDLDomain(), self.getSpecificString(), self.getControl(), self.getVn(), self.getHint());
         return constSSI;
     };
 
-    let getEncryptionKey = this.getEncryptionKey;
-    this.getEncryptionKey = () => {
-        return this.derive().getEncryptionKey();
+    self.getEncryptionKey = () => {
+        return self.derive().getEncryptionKey();
     };
 }
 
@@ -7522,16 +8244,16 @@ const SSITypes = require("../SSITypes");
 
 function CZaSSI(identifier) {
     KeySSIMixin(this);
-
+    const self = this;
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.initialize = (dlDomain, hpk, vn, hint) => {
-        this.load(SSITypes.CONSTANT_ZERO_ACCESS_SSI, dlDomain, subtypeSpecificString, hpk, vn, hint);
+    self.initialize = (dlDomain, hpk, vn, hint) => {
+        self.load(SSITypes.CONSTANT_ZERO_ACCESS_SSI, dlDomain, subtypeSpecificString, hpk, vn, hint);
     };
 
-    this.derive = () => {
+    self.derive = () => {
         throw Error("Not implemented");
     };
 }
@@ -7551,19 +8273,23 @@ const cryptoRegistry = require("../CryptoAlgorithmsRegistry");
 
 function ConstSSI(identifier){
     KeySSIMixin(this);
-
+    const self = this;
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.initialize = (dlDomain, subtypeSpecificString, vn, hint) => {
-        this.load(SSITypes.CONST_SSI, dlDomain, subtypeSpecificString, control, vn, hint);
+    self.initialize = (dlDomain, subtypeSpecificString, vn, hint) => {
+        self.load(SSITypes.CONST_SSI, dlDomain, subtypeSpecificString, vn, hint);
     };
 
-    this.derive = () => {
+    self.getEncryptionKey = () => {
+        return cryptoRegistry.getDecodingFunction(self)(self.getSpecificString());
+    };
+
+    self.derive = () => {
         const cZaSSI = CZaSSI.createCZaSSI();
-        const subtypeKey = cryptoRegistry.getHashFunction(this)(this.getEncryptionKey());
-        cZaSSI.load(SSITypes.CONSTANT_ZERO_ACCESS_SSI, this.getDLDomain(), subtypeKey, this.getControl(), this.getVn(), this.getHint());
+        const subtypeKey = cryptoRegistry.getHashFunction(self)(self.getEncryptionKey());
+        cZaSSI.load(SSITypes.CONSTANT_ZERO_ACCESS_SSI, self.getDLDomain(), subtypeKey, self.getControl(), self.getVn(), self.getHint());
         return cZaSSI;
     };
 }
@@ -7583,24 +8309,25 @@ const cryptoRegistry = require("../CryptoAlgorithmsRegistry");
 
 function PasswordSSI(identifier){
     KeySSIMixin(this);
+    const self = this;
 
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.initialize = (dlDomain, context, password, kdfOptions, vn, hint) => {
-        const subtypeSpecificString = cryptoRegistry.getKeyDerivationFunction(this)(context + password, kdfOptions);
-        this.load(SSITypes.PASSWORD_SSI, dlDomain, subtypeSpecificString, '', vn, hint);
+    self.initialize = (dlDomain, context, password, kdfOptions, vn, hint) => {
+        const subtypeSpecificString = cryptoRegistry.getKeyDerivationFunction(self)(context + password, kdfOptions);
+        self.load(SSITypes.PASSWORD_SSI, dlDomain, subtypeSpecificString, '', vn, hint);
     };
 
-    this.derive = () => {
+    self.derive = () => {
         const constSSI = ConstSSI.createConstSSI();
-        constSSI.load(SSITypes.CONST_SSI, this.getDLDomain(), this.getSubtypeSpecificString(), this.getControl(), this.getVn(), this.getHint());
+        constSSI.load(SSITypes.CONST_SSI, self.getDLDomain(), self.getSubtypeSpecificString(), self.getControl(), self.getVn(), self.getHint());
         return constSSI;
     };
 
-    this.getEncryptionKey = () => {
-        return this.derive().getEncryptionKey();
+    self.getEncryptionKey = () => {
+        return self.derive().getEncryptionKey();
     };
 }
 
@@ -7618,7 +8345,7 @@ const SSITypes = require("./SSITypes");
 const algorithms = {};
 const defaultAlgorithms = {
     hash: (data) => {
-        return crypto.hash('sha256', data, 'hex');
+        return defaultAlgorithms.encoding(crypto.hash('sha256', data));
     },
     keyDerivation: (password, iterations) => {
         return crypto.deriveKey('aes-256-gcm', password, iterations);
@@ -7634,10 +8361,10 @@ const defaultAlgorithms = {
     decryption: (encryptedData, decryptionKey, authTagLength, options) => {
         const pskEncryption = crypto.createPskEncryption('aes-256-gcm');
         const utils = require("swarmutils");
-        if (!Buffer.isBuffer(decryptionKey)) {
+        if (!Buffer.isBuffer(decryptionKey) && (decryptionKey instanceof ArrayBuffer || ArrayBuffer.isView(decryptionKey))) {
             decryptionKey = utils.convertToBuffer(decryptionKey);
         }
-        if (!Buffer.isBuffer(encryptedData)) {
+        if (!Buffer.isBuffer(encryptedData) && (decryptionKey instanceof ArrayBuffer || ArrayBuffer.isView(decryptionKey))) {
             encryptedData = utils.convertToBuffer(encryptedData);
         }
         return pskEncryption.decrypt(encryptedData, decryptionKey, 16, options);
@@ -7654,13 +8381,25 @@ const defaultAlgorithms = {
     sign: (data, privateKey) => {
         const keyGenerator = crypto.createKeyPairGenerator();
         const rawPublicKey = keyGenerator.getPublicKey(privateKey, 'secp256k1');
-        return crypto.sign('sha256', data, keyGenerator.convertKeys(privateKey, rawPublicKey).privateKey);
+        return crypto.sign('sha256', data, keyGenerator.getPemKeys(privateKey, rawPublicKey).privateKey);
     },
-    verify: (data, privateKey, signature) => {
-        const keyGenerator = crypto.createKeyPairGenerator();
-        const rawPublicKey = keyGenerator.getPublicKey(privateKey, 'secp256k1');
-        const publicKey = keyGenerator.convertKeys(privateKey, rawPublicKey).publicKey;
+    verify: (data, publicKey, signature) => {
         return crypto.verify('sha256', data, publicKey, signature);
+    },
+    derivePublicKey: (privateKey, format) => {
+        if (typeof format === "undefined") {
+            format = "pem";
+        }
+        const keyGenerator = crypto.createKeyPairGenerator();
+        let publicKey = keyGenerator.getPublicKey(privateKey, 'secp256k1');
+        switch(format){
+            case "raw":
+                return publicKey;
+            case "pem":
+                return keyGenerator.getPemKeys(privateKey, publicKey).publicKey;
+            default:
+                throw Error("Invalid format name");
+        }
     }
 };
 
@@ -7777,6 +8516,14 @@ CryptoAlgorithmsRegistry.prototype.getVerifyFunction = (keySSI) => {
     return getCryptoFunction(keySSI, 'verify');
 };
 
+CryptoAlgorithmsRegistry.prototype.registerDerivePublicKeyFunction = (keySSIType, vn, deriveFunction) => {
+    registerCryptoFunction(keySSIType, vn, 'derivePublicKey', deriveFunction);
+};
+
+CryptoAlgorithmsRegistry.prototype.getDerivePublicKeyFunction = (keySSI) => {
+    return getCryptoFunction(keySSI, 'derivePublicKey');
+};
+
 module.exports = new CryptoAlgorithmsRegistry();
 }).call(this)}).call(this,{"isBuffer":require("../../../../node_modules/is-buffer/index.js")})
 
@@ -7801,6 +8548,7 @@ const createArraySSI = require("./ConstSSIs/ArraySSI").createArraySSI;
 const createConstSSI = require("./ConstSSIs/ConstSSI").createConstSSI;
 const createCZaSSI = require("./ConstSSIs/CZaSSI").createCZaSSI;
 const createHashLinkSSI = require("./OtherKeySSIs/HashLinkSSI").createHashLinkSSI;
+const createSymmetricalEncryptionSSI = require("./OtherKeySSIs/SymmetricalEncryptionSSI").createSymmetricalEncryptionSSI;
 
 const SSITypes = require("./SSITypes");
 
@@ -7905,9 +8653,11 @@ KeySSIFactory.prototype.registerFactory(SSITypes.ARRAY_SSI, 'v0', SSITypes.CONST
 KeySSIFactory.prototype.registerFactory(SSITypes.CONST_SSI, 'v0', SSITypes.CONSTANT_ZERO_ACCESS_SSI, createConstSSI);
 KeySSIFactory.prototype.registerFactory(SSITypes.CONSTANT_ZERO_ACCESS_SSI, 'v0', undefined, createCZaSSI);
 KeySSIFactory.prototype.registerFactory(SSITypes.HASH_LINK_SSI, 'v0', undefined, createHashLinkSSI);
+KeySSIFactory.prototype.registerFactory(SSITypes.SYMMETRICAL_ENCRYPTION_SSI, 'v0', undefined, createSymmetricalEncryptionSSI);
 
 module.exports = new KeySSIFactory();
-},{"./ConstSSIs/ArraySSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\ArraySSI.js","./ConstSSIs/CZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\CZaSSI.js","./ConstSSIs/ConstSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\ConstSSI.js","./ConstSSIs/PasswordSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\PasswordSSI.js","./KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","./OtherKeySSIs/HashLinkSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\HashLinkSSI.js","./OtherKeySSIs/WalletSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\WalletSSI.js","./SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./SecretSSIs/AnchorSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\AnchorSSI.js","./SecretSSIs/PublicSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\PublicSSI.js","./SecretSSIs/ReadSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\ReadSSI.js","./SecretSSIs/SecretSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\SecretSSI.js","./SecretSSIs/ZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\ZaSSI.js","./SeedSSIs/SReadSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SReadSSI.js","./SeedSSIs/SZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SZaSSI.js","./SeedSSIs/SeedSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SeedSSI.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js":[function(require,module,exports){
+},{"./ConstSSIs/ArraySSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\ArraySSI.js","./ConstSSIs/CZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\CZaSSI.js","./ConstSSIs/ConstSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\ConstSSI.js","./ConstSSIs/PasswordSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\ConstSSIs\\PasswordSSI.js","./KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","./OtherKeySSIs/HashLinkSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\HashLinkSSI.js","./OtherKeySSIs/SymmetricalEncryptionSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\SymmetricalEncryptionSSI.js","./OtherKeySSIs/WalletSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\WalletSSI.js","./SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./SecretSSIs/AnchorSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\AnchorSSI.js","./SecretSSIs/PublicSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\PublicSSI.js","./SecretSSIs/ReadSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\ReadSSI.js","./SecretSSIs/SecretSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\SecretSSI.js","./SecretSSIs/ZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\ZaSSI.js","./SeedSSIs/SReadSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SReadSSI.js","./SeedSSIs/SZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SZaSSI.js","./SeedSSIs/SeedSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SeedSSI.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js":[function(require,module,exports){
+(function (Buffer){(function (){
 const cryptoRegistry = require("./CryptoAlgorithmsRegistry");
 const pskCrypto = require("pskcrypto");
 
@@ -7951,10 +8701,13 @@ function keySSIMixin(target){
         if (segments.length > 0) {
             _hint = segments.join(":");
         }
-        _subtypeSpecificString = cryptoRegistry.getDecodingFunction(target)(_subtypeSpecificString);
+        // _subtypeSpecificString = cryptoRegistry.getDecodingFunction(target)(_subtypeSpecificString);
     }
 
     target.load = function (subtype, dlDomain, subtypeSpecificString, control, vn, hint) {
+        if (Buffer.isBuffer(subtypeSpecificString)) {
+            throw Error("Invalid subtypeSpecificString");
+        }
         _subtype = subtype;
         _dlDomain = dlDomain;
         _subtypeSpecificString = subtypeSpecificString;
@@ -7976,10 +8729,6 @@ function keySSIMixin(target){
     target.getAnchorId = function () {
         const keySSIFactory = require("./KeySSIFactory");
         return keySSIFactory.getAnchorType(target).getIdentifier();
-    }
-
-    target.getEncryptionKey = function () {
-        return _subtypeSpecificString;
     }
 
     target.getSpecificString = function () {
@@ -8012,8 +8761,8 @@ function keySSIMixin(target){
     }
 
     target.getIdentifier = function (plain) {
-        const key = cryptoRegistry.getEncodingFunction(target)(_subtypeSpecificString);
-        let id = `${_prefix}:${target.getName()}:${_dlDomain}:${key}:${_control}:${_vn}`;
+        // const key = cryptoRegistry.getEncodingFunction(target)(_subtypeSpecificString);
+        let id = `${_prefix}:${target.getName()}:${_dlDomain}:${_subtypeSpecificString}:${_control}:${_vn}`;
 
         if (typeof _hint !== "undefined") {
             id += ":" + _hint;
@@ -8036,26 +8785,33 @@ function keySSIMixin(target){
 }
 
 module.exports = keySSIMixin;
-},{"./CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","./DSURepresentationNames":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\DSURepresentationNames.js","./KeySSIFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIFactory.js","pskcrypto":"pskcrypto"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\HashLinkSSI.js":[function(require,module,exports){
+}).call(this)}).call(this,{"isBuffer":require("../../../../node_modules/is-buffer/index.js")})
+
+},{"../../../../node_modules/is-buffer/index.js":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\is-buffer\\index.js","./CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","./DSURepresentationNames":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\DSURepresentationNames.js","./KeySSIFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIFactory.js","pskcrypto":"pskcrypto"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\HashLinkSSI.js":[function(require,module,exports){
 const KeySSIMixin = require("../KeySSIMixin");
 const SSITypes = require("../SSITypes");
 
 function HashLinkSSI(identifier) {
     KeySSIMixin(this);
+    const self = this;
 
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.initialize = (dlDomain, hash, vn) => {
-        this.load(SSITypes.HASH_LINK_SSI, dlDomain, hash, '', vn);
+    self.initialize = (dlDomain, hash, vn) => {
+        self.load(SSITypes.HASH_LINK_SSI, dlDomain, hash, '', vn);
     };
 
-    this.getHash = () => {
-        return this.getEncryptionKey();
+    self.getHash = () => {
+        const specificString = self.getSpecificString();
+        if (typeof specificString !== "string") {
+            console.trace("Specific string is not string", specificString.toString());
+        }
+        return specificString;
     };
 
-    this.derive = () => {
+    self.derive = () => {
         throw Error("Not implemented");
     };
 }
@@ -8067,20 +8823,69 @@ function createHashLinkSSI(identifier) {
 module.exports = {
     createHashLinkSSI
 };
-},{"../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\WalletSSI.js":[function(require,module,exports){
+},{"../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\SymmetricalEncryptionSSI.js":[function(require,module,exports){
+(function (Buffer){(function (){
+const KeySSIMixin = require("../KeySSIMixin");
+const SSITypes = require("../SSITypes");
+const cryptoRegistry = require("../CryptoAlgorithmsRegistry");
+
+function SymmetricalEncryptionSSI(identifier) {
+    KeySSIMixin(this);
+    const self = this;
+    if (typeof identifier !== "undefined") {
+        self.autoLoad(identifier);
+    }
+
+    self.getName = () => {
+        return SSITypes.SYMMETRICAL_ENCRYPTION_SSI;
+    };
+
+    let load = self.load;
+    self.load = function (subtype, dlDomain, encryptionKey, control, vn, hint){
+        if (typeof encryptionKey === "undefined") {
+            encryptionKey = cryptoRegistry.getEncryptionKeyGenerationFunction(self)();
+        }
+
+        if (Buffer.isBuffer(encryptionKey)) {
+            encryptionKey = cryptoRegistry.getEncodingFunction(self)(encryptionKey);
+        }
+
+        load(subtype, dlDomain, encryptionKey, '', vn, hint);
+    }
+
+    self.getEncryptionKey = function() {
+        return cryptoRegistry.getDecodingFunction(self)(self.getSpecificString());
+    };
+
+    self.derive = function (){
+        throw Error("Not implemented");
+    }
+}
+
+function createSymmetricalEncryptionSSI(identifier) {
+    return new SymmetricalEncryptionSSI(identifier);
+}
+
+module.exports = {
+    createSymmetricalEncryptionSSI
+};
+}).call(this)}).call(this,{"isBuffer":require("../../../../../node_modules/is-buffer/index.js")})
+
+},{"../../../../../node_modules/is-buffer/index.js":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\is-buffer\\index.js","../CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\OtherKeySSIs\\WalletSSI.js":[function(require,module,exports){
 const SeedSSI = require("./../SeedSSIs/SeedSSI");
 const SSITypes = require("../SSITypes");
 
 function WalletSSI(identifier) {
+    const self = this;
     const seedSSI = SeedSSI.createSeedSSI(identifier);
 
     seedSSI.getName = () => {
         return SSITypes.WALLET_SSI;
     };
 
-    Object.assign(this, seedSSI);
+    Object.assign(self, seedSSI);
 
-    this.initialize = (dlDomain, privateKey, publicKey, vn, hint, callback) => {
+    self.initialize = (dlDomain, privateKey, publicKey, vn, hint, callback) => {
 
         let oldLoad = seedSSI.load;
         seedSSI.load = function (subtype, dlDomain, subtypeSpecificString, control, vn, hint) {
@@ -8090,46 +8895,40 @@ function WalletSSI(identifier) {
         seedSSI.initialize(dlDomain, privateKey, publicKey, vn, hint, callback);
     }
 
-    this.store = (options, callback) => {
-        let ssiCage = require("./../../ssiCage");
-        if(typeof options !== "undefined" && typeof options.ssiCage !== "undefined"){
-            ssiCage = options.ssiCage;
-        }
-
-        ssiCage.putSSI(this.getIdentifier(), options.password, options.overwrite, (err) => {
+    self.store = (key, callback) => {
+        let keySSISpace = require("opendsu").loadApi("keyssi");
+        let resolver = require("opendsu").loadApi("resolver");
+        let arraySSI = keySSISpace.buildArraySSI(self.getDLDomain(), key);
+        resolver.createDSU(arraySSI, {useSSIAsIdentifier: true}, (err, constDSU) => {
             if (err) {
                 return callback(err);
             }
-            callback(undefined, this);
+            constDSU.writeFile("/wallet.ssi", self.getIdentifier(), (err, data) => {
+                if (err) {
+                    return callback(err);
+                }
+                callback(undefined, self);
+            });
         });
     }
 
-    //options.ssiCage - custom implementation of a SSI Cage
-    this.getSeedSSI = (secret, options, callback) => {
-        if(typeof options === "function"){
-            callback = options;
-            options = {};
-        }
-
-        let ssiCage = require("../../ssiCage");
-        if(typeof options.ssiCage !== "undefined"){
-            ssiCage = options.ssiCage;
-        }
-        ssiCage.getSSI(secret, (err, ssiSerialization)=>{
-            if(err){
+    self.getSeedSSI = (key, callback) => {
+        let keySSISpace = require("opendsu").loadApi("keyssi");
+        let resolver = require("opendsu").loadApi("resolver");
+        let arraySSI = keySSISpace.buildArraySSI(self.getDLDomain(), key);
+        resolver.loadDSU(arraySSI, (err, constDSU) => {
+            if (err) {
                 return callback(err);
             }
-
-            //SeedSSI or WalletSSI ???????????
-            let keySSI = SeedSSI.createSeedSSI(ssiSerialization);
-            keySSI.options = options;
-            callback(undefined, keySSI);
+            constDSU.readFile("/wallet.ssi", (err, data) => {
+                if (err) {
+                    return callback(err);
+                }
+                const ssiSerialization = data.toString();
+                let keySSI = SeedSSI.createSeedSSI(ssiSerialization);
+                callback(undefined, keySSI);
+            });
         });
-    }
-
-    this.checkForSSICage = (callback) => {
-        let ssiCage = require("../../ssiCage");
-        ssiCage.check(callback);
     }
 }
 
@@ -8141,7 +8940,7 @@ module.exports = {
     createWalletSSI
 }
 
-},{"../../ssiCage":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\index.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./../../ssiCage":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\index.js","./../SeedSSIs/SeedSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SeedSSI.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js":[function(require,module,exports){
+},{"../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./../SeedSSIs/SeedSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SeedSSI.js","opendsu":false}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js":[function(require,module,exports){
 module.exports = {
     DEFAULT: "default",
     SECRET_SSI: "secret",
@@ -8157,7 +8956,8 @@ module.exports = {
     CONSTANT_ZERO_ACCESS_SSI: "cza",
     ARRAY_SSI: "array",
     HASH_LINK_SSI: "hl",
-    WALLET_SSI: "wallet"
+    WALLET_SSI: "wallet",
+    SYMMETRICAL_ENCRYPTION_SSI: "se"
 };
 },{}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SecretSSIs\\AnchorSSI.js":[function(require,module,exports){
 const KeySSIMixin = require("../KeySSIMixin");
@@ -8292,7 +9092,6 @@ module.exports = {
     createZaSSI
 };
 },{"../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SReadSSI.js":[function(require,module,exports){
-(function (Buffer){(function (){
 const KeySSIMixin = require("../KeySSIMixin");
 const SZaSSI = require("./SZaSSI");
 const SSITypes = require("../SSITypes");
@@ -8300,27 +9099,26 @@ const cryptoRegistry = require("../CryptoAlgorithmsRegistry");
 
 function SReadSSI(identifier) {
     KeySSIMixin(this);
+    const self = this;
 
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.initialize = (dlDomain, vn, hint) => {
-        this.load(SSITypes.SREAD_SSI, dlDomain, "", undefined, vn, hint);
+    self.initialize = (dlDomain, vn, hint) => {
+        self.load(SSITypes.SREAD_SSI, dlDomain, "", undefined, vn, hint);
     };
 
-    this.derive = () => {
+    self.derive = () => {
         const sZaSSI = SZaSSI.createSZaSSI();
         const subtypeKey = '';
-        const subtypeControl = cryptoRegistry.getHashFunction(this)(this.getControl());
-        sZaSSI.load(SSITypes.SZERO_ACCESS_SSI, this.getDLDomain(), subtypeKey, subtypeControl, this.getVn(), this.getHint());
+        const subtypeControl = cryptoRegistry.getHashFunction(self)(self.getControl());
+        sZaSSI.load(SSITypes.SZERO_ACCESS_SSI, self.getDLDomain(), subtypeKey, subtypeControl, self.getVn(), self.getHint());
         return sZaSSI;
     };
 
-    let getEncryptionKey = this.getEncryptionKey;
-
-    this.getEncryptionKey = () => {
-        return Buffer.from(getEncryptionKey(), 'hex');
+    self.getEncryptionKey = () => {
+        return cryptoRegistry.getDecodingFunction(self)(self.getControl());
     };
 }
 
@@ -8331,24 +9129,23 @@ function createSReadSSI(identifier) {
 module.exports = {
     createSReadSSI
 };
-}).call(this)}).call(this,require("buffer").Buffer)
-
-},{"../CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./SZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SZaSSI.js","buffer":false}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SZaSSI.js":[function(require,module,exports){
+},{"../CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./SZaSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SZaSSI.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SZaSSI.js":[function(require,module,exports){
 const KeySSIMixin = require("../KeySSIMixin");
 const SSITypes = require("../SSITypes");
 
 function SZaSSI(identifier) {
-    KeySSIMixin(this);
+    const self = this;
+    KeySSIMixin(self);
 
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.initialize = (dlDomain, hpk, vn, hint) => {
-        this.load(SSITypes.SZERO_ACCESS_SSI, dlDomain, '', hpk, vn, hint);
+    self.initialize = (dlDomain, hpk, vn, hint) => {
+        self.load(SSITypes.SZERO_ACCESS_SSI, dlDomain, '', hpk, vn, hint);
     };
 
-    this.derive = () => {
+    self.derive = () => {
         throw Error("Not implemented");
     };
 }
@@ -8368,54 +9165,57 @@ const cryptoRegistry = require("../CryptoAlgorithmsRegistry");
 
 function SeedSSI(identifier) {
     KeySSIMixin(this);
-
+    const self = this;
     if (typeof identifier !== "undefined") {
-        this.autoLoad(identifier);
+        self.autoLoad(identifier);
     }
 
-    this.getName = () => {
+    self.getName = () => {
         return SSITypes.SEED_SSI;
     };
 
-    this.initialize = function (dlDomain, privateKey, publicKey, vn, hint, callback){
+    self.initialize = function (dlDomain, privateKey, control, vn, hint, callback){
         let subtypeSpecificString = privateKey;
 
         if (typeof subtypeSpecificString === "undefined") {
-            return cryptoRegistry.getKeyPairGenerator(this)().generateKeyPair((err, publicKey, privateKey) => {
+            return cryptoRegistry.getKeyPairGenerator(self)().generateKeyPair((err, publicKey, privateKey) => {
                 if (err) {
                     return callback(err);
                 }
-                subtypeSpecificString = privateKey;
-                this.load(SSITypes.SEED_SSI, dlDomain, subtypeSpecificString, '', vn, hint);
-                callback(undefined, this);
+                subtypeSpecificString = cryptoRegistry.getEncodingFunction(self)(privateKey);
+                self.load(SSITypes.SEED_SSI, dlDomain, subtypeSpecificString, '', vn, hint);
+                callback(undefined, self);
             });
         }
-        this.load(SSITypes.SEED_SSI, dlDomain, subtypeSpecificString, '', vn, hint);
-        callback(undefined, this);
+        self.load(SSITypes.SEED_SSI, dlDomain, subtypeSpecificString, '', vn, hint);
+        callback(undefined, self);
     };
 
-    this.derive = function() {
+    self.derive = function() {
         const sReadSSI = SReadSSI.createSReadSSI();
-        const subtypeKey = cryptoRegistry.getHashFunction(this)(this.getSpecificString());
-        const publicKey = cryptoRegistry.getKeyPairGenerator(this)().getPublicKey(this.getSpecificString());
-        const subtypeControl = cryptoRegistry.getHashFunction(this)(publicKey);
-        sReadSSI.load(SSITypes.SREAD_SSI, this.getDLDomain(), subtypeKey, subtypeControl, this.getVn(), this.getHint());
+        const sreadSpecificString = '';
+        const privateKey = self.getPrivateKey();
+        const publicKey = cryptoRegistry.getDerivePublicKeyFunction(self)(privateKey);
+        const subtypeControl = cryptoRegistry.getHashFunction(self)(publicKey);
+        sReadSSI.load(SSITypes.SREAD_SSI, self.getDLDomain(), sreadSpecificString, subtypeControl, self.getVn(), self.getHint());
         return sReadSSI;
-
-        /*
-        const sReadSSI = SReadSSI.createSReadSSI();
-        const subtypeKey = cryptoRegistry.getHashFunction(this)(this.subtypeSpecificString);
-        const publicKey = cryptoRegistry.getKeyPairGenerator(this)().getPublicKey(this.subtypeSpecificString);
-        const subtypeControl = cryptoRegistry.getHashFunction(this)(publicKey);
-        sReadSSI.load(SSITypes.SREAD_SSI, this.dlDomain, subtypeKey, subtypeControl, this.vn, this.hint);
-        return sReadSSI;
-        * */
     };
 
-    let getEncryptionKey = this.getEncryptionKey;
+    self.getPrivateKey = function (format){
+        let privateKey = cryptoRegistry.getDecodingFunction(self)(self.getSpecificString());
+        if(format === "pem"){
+            const pemKeys = cryptoRegistry.getKeyPairGenerator(self)().getPemKeys(privateKey, self.getPublicKey("raw"));
+            privateKey = pemKeys.privateKey;
+        }
+        return privateKey;
+    }
 
-    this.getEncryptionKey = function() {
-        return this.derive().getEncryptionKey();
+    self.getPublicKey = function (format){
+      return cryptoRegistry.getDerivePublicKeyFunction(self)(self.getPrivateKey(), format);
+    }
+
+    self.getEncryptionKey = function() {
+        return self.derive().getEncryptionKey();
     };
 }
 
@@ -8426,205 +9226,10 @@ function createSeedSSI(identifier) {
 module.exports = {
     createSeedSSI
 };
-},{"../CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./SReadSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SReadSSI.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\constants.js":[function(require,module,exports){
-'use strict';
-
-module.exports = {
-    DEFAULT_DOMAIN: 'localDomain',
-    DID_VERSION: '1',
-    DEFAULT_BAR_MAP_STRATEGY: 'Diff',
-}
-
-},{}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\BrowserSSICage.js":[function(require,module,exports){
-(function (Buffer){(function (){
-const pskcrypto = "pskcrypto";
-const crypto = require(pskcrypto);
-
-const storageLocation = "SSICage";
-const algorithm = "aes-256-cfb";
-
-/**
- * local storage can't handle properly binary data
- *  https://stackoverflow.com/questions/52419694/how-to-store-uint8array-in-the-browser-with-localstorage-using-javascript
- * @param secret
- * @param callback
- * @returns {*}
- */
-function getSSI(secret, callback) {
-    let encryptedSSI;
-    let keySSI;
-    try {
-        encryptedSSI = localStorage.getItem(storageLocation);
-        if (encryptedSSI === null || typeof encryptedSSI !== "string" || encryptedSSI.length === 0) {
-            return callback(new Error("SSI Cage is empty or data was altered"));
-        }
-
-        const retrievedEncryptedArr = JSON.parse(encryptedSSI);
-        encryptedSSI = new Uint8Array(retrievedEncryptedArr);
-        const pskEncryption = crypto.createPskEncryption(algorithm);
-        const encKey = crypto.deriveKey(algorithm, secret);
-        keySSI = pskEncryption.decrypt(encryptedSSI, encKey).toString();
-    } catch (e) {
-        return callback(e);
-    }
-    callback(undefined, keySSI);
-}
-
-function putSSI(keySSI, secret, overwrite = false, callback) {
-    let encryptedSSI;
-
-    if (typeof overwrite === "function") {
-        callback(Error("TODO: api signature updated!"));
-    }
-    try {
-        if (typeof keySSI === "string") {
-            keySSI = Buffer.from(keySSI);
-        }
-        if (typeof keySSI === "object" && !Buffer.isBuffer(keySSI)) {
-            keySSI = Buffer.from(keySSI);
-        }
-
-        const pskEncryption = crypto.createPskEncryption(algorithm);
-        const encKey = crypto.deriveKey(algorithm, secret);
-        encryptedSSI = pskEncryption.encrypt(keySSI, encKey);
-        const encryptedArray =  Array.from(encryptedSSI);
-        const encryptedSeed = JSON.stringify(encryptedArray);
-
-        localStorage.setItem(storageLocation, encryptedSeed);
-    } catch (e) {
-        return callback(e);
-    }
-    callback(undefined);
-}
-
-function check(callback) {
-    let item;
-    try {
-        item = localStorage.getItem(storageLocation);
-    } catch (e) {
-        return callback(e);
-    }
-    if (item) {
-        return callback();
-    }
-    callback(new Error("SSI Cage does not exists"));
-}
-
-module.exports = {
-    check,
-    putSSI,
-    getSSI
-};
-
-}).call(this)}).call(this,require("buffer").Buffer)
-
-},{"buffer":false}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\NodeSSICage.js":[function(require,module,exports){
-(function (Buffer){(function (){
-const pth = "path";
-const path = require(pth);
-
-const fileSystem = "fs";
-const fs = require(fileSystem);
-
-const pskcrypto = "pskcrypto";
-const crypto = require(pskcrypto);
-const algorithm = "aes-256-cfb";
-
-const os = "os";
-const storageLocation = process.env.SEED_CAGE_LOCATION || require(os).homedir();
-const storageFileName = ".SSICage";
-const ssiCagePath = path.join(storageLocation, storageFileName);
-
-function getSSI(secret, callback) {
-    fs.readFile(ssiCagePath, (err, encryptedSeed) => {
-        if (err) {
-            return callback(err);
-        }
-
-        let keySSI;
-        try {
-            const pskEncryption = crypto.createPskEncryption(algorithm);
-            const encKey = crypto.deriveKey(algorithm, secret);
-            keySSI = pskEncryption.decrypt(encryptedSeed, encKey).toString();
-        } catch (e) {
-            return callback(e);
-        }
-
-        callback(undefined, keySSI);
-    });
-}
-
-function putSSI(keySSI, secret, overwrite = false, callback) {
-    fs.mkdir(storageLocation, {recursive: true}, (err) => {
-        if (err) {
-            return callback(err);
-        }
-
-        fs.stat(ssiCagePath, (err, stats) => {
-            if (!err && stats.size > 0) {
-                if (overwrite) {
-                    __encryptSSI();
-                } else {
-                    return callback(Error("Attempted to overwrite existing SEED."));
-                }
-            } else {
-                __encryptSSI();
-            }
-
-            function __encryptSSI() {
-                let encSeed;
-                try {
-                    if (typeof keySSI === "string") {
-                        keySSI = Buffer.from(keySSI);
-                    }
-
-                    if (typeof keySSI === "object" && !Buffer.isBuffer(keySSI)) {
-                        keySSI = Buffer.from(keySSI);
-                    }
-
-                    const pskEncryption = crypto.createPskEncryption(algorithm);
-                    const encKey = crypto.deriveKey(algorithm, secret);
-                    encSeed = pskEncryption.encrypt(keySSI, encKey);
-                } catch (e) {
-                    return callback(e);
-                }
-
-                fs.writeFile(ssiCagePath, encSeed, callback);
-            }
-        });
-    });
-}
-
-function check(callback) {
-    fs.access(ssiCagePath, callback);
-}
-
-module.exports = {
-    check,
-    putSSI,
-    getSSI
-};
-
-}).call(this)}).call(this,require("buffer").Buffer)
-
-},{"buffer":false}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\index.js":[function(require,module,exports){
-const or = require("overwrite-require");
-switch ($$.environmentType) {
-    case or.constants.THREAD_ENVIRONMENT_TYPE:
-    case or.constants.NODEJS_ENVIRONMENT_TYPE:
-        module.exports = require("./NodeSSICage");
-        break;
-    case or.constants.BROWSER_ENVIRONMENT_TYPE:
-        module.exports = require("./BrowserSSICage");
-        break;
-    case or.constants.SERVICE_WORKER_ENVIRONMENT_TYPE:
-    case or.constants.ISOLATE_ENVIRONMENT_TYPE:
-    default:
-        throw new Error("No implementation of SSI Cage for this env type.");
-}
-},{"./BrowserSSICage":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\BrowserSSICage.js","./NodeSSICage":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\ssiCage\\NodeSSICage.js","overwrite-require":"overwrite-require"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\overwrite-require\\moduleConstants.js":[function(require,module,exports){
+},{"../CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","../KeySSIMixin":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIMixin.js","../SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./SReadSSI":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SeedSSIs\\SReadSSI.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\overwrite-require\\moduleConstants.js":[function(require,module,exports){
 module.exports = {
   BROWSER_ENVIRONMENT_TYPE: 'browser',
+  MOBILE_BROWSER_ENVIRONMENT_TYPE: 'mobile-browser',
   SERVICE_WORKER_ENVIRONMENT_TYPE: 'service-worker',
   ISOLATE_ENVIRONMENT_TYPE: 'isolate',
   THREAD_ENVIRONMENT_TYPE: 'thread',
@@ -10012,7 +10617,11 @@ function generateMethodForRequestWithData(httpMethod) {
             });
         }
         else {
-            if(ArrayBuffer.isView(data) || data instanceof ArrayBuffer) {
+            if(data instanceof ArrayBuffer){
+                data = new DataView(data);
+            }
+
+            if(ArrayBuffer.isView(data)) {
                 xhr.setRequestHeader('Content-Type', 'application/octet-stream');
 
                 /**
@@ -10317,7 +10926,7 @@ function ECKeyGenerator() {
         callback(undefined, publicKey, privateKey);
     };
 
-    this.convertKeys = (privateKey, publicKey, options) => {
+    this.getPemKeys = (privateKey, publicKey, options) => {
         const defaultOpts = {format: 'pem', namedCurve: 'secp256k1'};
         Object.assign(defaultOpts, options);
         options = defaultOpts;
@@ -10434,6 +11043,14 @@ function PskCrypto() {
         return hash.digest(encoding);
     };
 
+    this.objectHash = (algorithm, data, encoding) => {
+        if(!Buffer.isBuffer(data)){
+            const ssutils = require("../signsensusDS/ssutil");
+            data = ssutils.dumpObjectForHashing(data);
+        }
+        return this.hash(algorithm, data, encoding);
+    };
+
     this.pskBase58Encode = function (data) {
         return utils.base58Encode(data);
     }
@@ -10539,7 +11156,7 @@ module.exports = new PskCrypto();
 
 }).call(this)}).call(this,require("buffer").Buffer)
 
-},{"./ECKeyGenerator":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\ECKeyGenerator.js","./PskEncryption":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js","./utils/cryptoUtils":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\utils\\cryptoUtils.js","buffer":false,"crypto":false,"overwrite-require":"overwrite-require"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js":[function(require,module,exports){
+},{"../signsensusDS/ssutil":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\signsensusDS\\ssutil.js","./ECKeyGenerator":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\ECKeyGenerator.js","./PskEncryption":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js","./utils/cryptoUtils":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\utils\\cryptoUtils.js","buffer":false,"crypto":false,"overwrite-require":"overwrite-require"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js":[function(require,module,exports){
 (function (Buffer){(function (){
 const crypto = require("crypto");
 const utils = require("./utils/cryptoUtils");
@@ -10559,6 +11176,9 @@ function PskEncryption(algorithm) {
     let encryptionIsAuthenticated = utils.encryptionIsAuthenticated(algorithm);
 
     this.encrypt = (plainData, encryptionKey, options) => {
+        if (typeof encryptionKey === "string") {
+            encryptionKey = Buffer.from(encryptionKey);
+        }
         iv = iv || crypto.randomBytes(16);
         const cipher = crypto.createCipheriv(algorithm, encryptionKey, iv, options);
         if (encryptionIsAuthenticated) {
@@ -10588,6 +11208,9 @@ function PskEncryption(algorithm) {
     };
 
     this.decrypt = (encryptedData, decryptionKey, authTagLength = 0, options) => {
+        if (typeof decryptionKey === "string") {
+            decryptionKey = Buffer.from(decryptionKey);
+        }
         if (!iv) {
             this.getDecryptionParameters(encryptedData, authTagLength);
         }
@@ -19399,19 +20022,14 @@ module.exports.AnchoringMiddleware = require("./lib/AnchoringMiddleware");
 
 },{"./lib/AnchoringMiddleware":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\edfs-middleware\\lib\\AnchoringMiddleware.js","./lib/BrickStorageMiddleware":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\edfs-middleware\\lib\\BrickStorageMiddleware.js"}],"key-ssi-resolver":[function(require,module,exports){
 const KeySSIResolver = require('./lib/KeySSIResolver');
-const constants = require('./lib/constants');
 const DSUFactory = require("./lib/DSUFactoryRegistry");
 const BootStrapingService = require("./lib/BootstrapingService");
 
 /**
- * Create a new KeyDIDResolver instance and append it to
+ * Create a new KeySSIResolver instance and append it to
  * global object $$
  *
  * @param {object} options
- * @param {object} options.endpointsConfiguration
- * @param {Array<object>} options.endpointsConfiguration.brick
- * @param {Array<object>} options.endpointsConfiguration.alias
- * @param {string} options.dlDomain
  */
 function initialize(options) {
     options = options || {};
@@ -19435,14 +20053,13 @@ function initialize(options) {
 
 module.exports = {
     initialize,
-    constants,
     KeySSIFactory: require('./lib/KeySSIs/KeySSIFactory'),
     CryptoAlgorithmsRegistry: require('./lib/KeySSIs/CryptoAlgorithmsRegistry'),
     SSITypes: require("./lib/KeySSIs/SSITypes"),
     DSUFactory: require("./lib/DSUFactoryRegistry")
 };
 
-},{"./lib/BootstrapingService":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\BootstrapingService\\index.js","./lib/DSUFactoryRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\index.js","./lib/KeySSIResolver":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIResolver.js","./lib/KeySSIs/CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","./lib/KeySSIs/KeySSIFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIFactory.js","./lib/KeySSIs/SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","./lib/constants":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\constants.js","bar":"bar"}],"overwrite-require":[function(require,module,exports){
+},{"./lib/BootstrapingService":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\BootstrapingService\\index.js","./lib/DSUFactoryRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\DSUFactoryRegistry\\index.js","./lib/KeySSIResolver":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIResolver.js","./lib/KeySSIs/CryptoAlgorithmsRegistry":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\CryptoAlgorithmsRegistry.js","./lib/KeySSIs/KeySSIFactory":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\KeySSIFactory.js","./lib/KeySSIs/SSITypes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\key-ssi-resolver\\lib\\KeySSIs\\SSITypes.js","bar":"bar"}],"overwrite-require":[function(require,module,exports){
 (function (global){(function (){
 /*
  require and $$.require are overwriting the node.js defaults in loading modules for increasing security, speed and making it work to the privatesky runtime build with browserify.
@@ -20475,30 +21092,29 @@ module.exports.TaskCounter = require("./lib/TaskCounter");
 module.exports.SwarmPacker = require("./lib/SwarmPacker");
 module.exports.path = require("./lib/path");
 module.exports.createPskConsole = function () {
-  return require('./lib/pskconsole');
+    return require('./lib/pskconsole');
 };
 
 module.exports.pingPongFork = require('./lib/pingpongFork');
 
 
-if(typeof global.$$ == "undefined"){
-  global.$$ = {};
+if (typeof global.$$ == "undefined") {
+    global.$$ = {};
 }
 
-if(typeof global.$$.uidGenerator == "undefined"){
+if (typeof global.$$.uidGenerator == "undefined") {
     $$.uidGenerator = module.exports.safe_uuid;
 }
 
-module.exports.convertToBuffer = function(uint8array){
-    const newBuffer = new Buffer(uint8array.byteLength);
-    let currentPos = 0;
-    const arrBuf = uint8array;
-    const partialDataView = new DataView(arrBuf);
-    for (let i = 0; i < arrBuf.byteLength; i++) {
-        newBuffer.writeUInt8(partialDataView.getUint8(i), currentPos);
-        currentPos += 1;
+module.exports.convertToBuffer = function (uint8array) {
+    let buffer;
+    if (ArrayBuffer.isView(uint8array)) {
+        buffer = Buffer.from(uint8array.buffer)
+    } else {
+        buffer = Buffer.from(uint8array);
     }
-    return newBuffer;
+
+    return buffer;
 }
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {},require("buffer").Buffer)

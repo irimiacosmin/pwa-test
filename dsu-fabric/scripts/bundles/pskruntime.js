@@ -1877,7 +1877,11 @@ function generateMethodForRequestWithData(httpMethod) {
             });
         }
         else {
-            if(ArrayBuffer.isView(data) || data instanceof ArrayBuffer) {
+            if(data instanceof ArrayBuffer){
+                data = new DataView(data);
+            }
+
+            if(ArrayBuffer.isView(data)) {
                 xhr.setRequestHeader('Content-Type', 'application/octet-stream');
 
                 /**
@@ -10462,30 +10466,29 @@ module.exports.TaskCounter = require("./lib/TaskCounter");
 module.exports.SwarmPacker = require("./lib/SwarmPacker");
 module.exports.path = require("./lib/path");
 module.exports.createPskConsole = function () {
-  return require('./lib/pskconsole');
+    return require('./lib/pskconsole');
 };
 
 module.exports.pingPongFork = require('./lib/pingpongFork');
 
 
-if(typeof global.$$ == "undefined"){
-  global.$$ = {};
+if (typeof global.$$ == "undefined") {
+    global.$$ = {};
 }
 
-if(typeof global.$$.uidGenerator == "undefined"){
+if (typeof global.$$.uidGenerator == "undefined") {
     $$.uidGenerator = module.exports.safe_uuid;
 }
 
-module.exports.convertToBuffer = function(uint8array){
-    const newBuffer = new Buffer(uint8array.byteLength);
-    let currentPos = 0;
-    const arrBuf = uint8array;
-    const partialDataView = new DataView(arrBuf);
-    for (let i = 0; i < arrBuf.byteLength; i++) {
-        newBuffer.writeUInt8(partialDataView.getUint8(i), currentPos);
-        currentPos += 1;
+module.exports.convertToBuffer = function (uint8array) {
+    let buffer;
+    if (ArrayBuffer.isView(uint8array)) {
+        buffer = Buffer.from(uint8array.buffer)
+    } else {
+        buffer = Buffer.from(uint8array);
     }
-    return newBuffer;
+
+    return buffer;
 }
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {},require("buffer").Buffer)

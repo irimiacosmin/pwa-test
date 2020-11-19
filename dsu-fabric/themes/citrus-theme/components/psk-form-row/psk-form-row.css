@@ -16,3 +16,7 @@
     grid-template-rows: 2ch;
     padding-bottom: 30px;
 }
+
+.add-batch-form psk-form-row button{
+    margin-top: 10px;
+}

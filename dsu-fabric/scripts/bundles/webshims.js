@@ -97,6 +97,7 @@ require('source-map-support').install({});
 },{"assert":"assert","buffer":"buffer","crypto":"crypto","events":"events","os":"os","overwrite-require":"overwrite-require","path":"path","pskcrypto":"pskcrypto","source-map-support":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\source-map-support\\source-map-support.js","stream":"stream","timers":"timers","util":"util","zlib":"zlib"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\overwrite-require\\moduleConstants.js":[function(require,module,exports){
 module.exports = {
   BROWSER_ENVIRONMENT_TYPE: 'browser',
+  MOBILE_BROWSER_ENVIRONMENT_TYPE: 'mobile-browser',
   SERVICE_WORKER_ENVIRONMENT_TYPE: 'service-worker',
   ISOLATE_ENVIRONMENT_TYPE: 'isolate',
   THREAD_ENVIRONMENT_TYPE: 'thread',
@@ -434,7 +435,7 @@ function ECKeyGenerator() {
         callback(undefined, publicKey, privateKey);
     };
 
-    this.convertKeys = (privateKey, publicKey, options) => {
+    this.getPemKeys = (privateKey, publicKey, options) => {
         const defaultOpts = {format: 'pem', namedCurve: 'secp256k1'};
         Object.assign(defaultOpts, options);
         options = defaultOpts;
@@ -551,6 +552,14 @@ function PskCrypto() {
         return hash.digest(encoding);
     };
 
+    this.objectHash = (algorithm, data, encoding) => {
+        if(!Buffer.isBuffer(data)){
+            const ssutils = require("../signsensusDS/ssutil");
+            data = ssutils.dumpObjectForHashing(data);
+        }
+        return this.hash(algorithm, data, encoding);
+    };
+
     this.pskBase58Encode = function (data) {
         return utils.base58Encode(data);
     }
@@ -656,7 +665,7 @@ module.exports = new PskCrypto();
 
 }).call(this)}).call(this,require("buffer").Buffer)
 
-},{"./ECKeyGenerator":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\ECKeyGenerator.js","./PskEncryption":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js","./utils/cryptoUtils":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\utils\\cryptoUtils.js","buffer":"buffer","crypto":"crypto","overwrite-require":"overwrite-require"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js":[function(require,module,exports){
+},{"../signsensusDS/ssutil":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\signsensusDS\\ssutil.js","./ECKeyGenerator":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\ECKeyGenerator.js","./PskEncryption":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js","./utils/cryptoUtils":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\utils\\cryptoUtils.js","buffer":"buffer","crypto":"crypto","overwrite-require":"overwrite-require"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\modules\\pskcrypto\\lib\\PskEncryption.js":[function(require,module,exports){
 (function (Buffer){(function (){
 const crypto = require("crypto");
 const utils = require("./utils/cryptoUtils");
@@ -676,6 +685,9 @@ function PskEncryption(algorithm) {
     let encryptionIsAuthenticated = utils.encryptionIsAuthenticated(algorithm);
 
     this.encrypt = (plainData, encryptionKey, options) => {
+        if (typeof encryptionKey === "string") {
+            encryptionKey = Buffer.from(encryptionKey);
+        }
         iv = iv || crypto.randomBytes(16);
         const cipher = crypto.createCipheriv(algorithm, encryptionKey, iv, options);
         if (encryptionIsAuthenticated) {
@@ -705,6 +717,9 @@ function PskEncryption(algorithm) {
     };
 
     this.decrypt = (encryptedData, decryptionKey, authTagLength = 0, options) => {
+        if (typeof decryptionKey === "string") {
+            decryptionKey = Buffer.from(decryptionKey);
+        }
         if (!iv) {
             this.getDecryptionParameters(encryptedData, authTagLength);
         }
@@ -11343,9 +11358,7 @@ function fromByteArray (uint8) {
 
   // go through the array every three bytes, we'll deal with trailing stuff later
   for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
-    parts.push(encodeChunk(
-      uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)
-    ))
+    parts.push(encodeChunk(uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)))
   }
 
   // pad the end with zeros, but make sure to not forget the extra bytes
@@ -16272,52 +16285,45 @@ exports['des-ede'] = {
 
 },{}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-rsa\\index.js":[function(require,module,exports){
 (function (Buffer){(function (){
-var bn = require('bn.js');
-var randomBytes = require('randombytes');
-module.exports = crt;
-function blind(priv) {
-  var r = getr(priv);
-  var blinder = r.toRed(bn.mont(priv.modulus))
-  .redPow(new bn(priv.publicExponent)).fromRed();
-  return {
-    blinder: blinder,
-    unblinder:r.invm(priv.modulus)
-  };
+var BN = require('bn.js')
+var randomBytes = require('randombytes')
+
+function blind (priv) {
+  var r = getr(priv)
+  var blinder = r.toRed(BN.mont(priv.modulus)).redPow(new BN(priv.publicExponent)).fromRed()
+  return { blinder: blinder, unblinder: r.invm(priv.modulus) }
 }
-function crt(msg, priv) {
-  var blinds = blind(priv);
-  var len = priv.modulus.byteLength();
-  var mod = bn.mont(priv.modulus);
-  var blinded = new bn(msg).mul(blinds.blinder).umod(priv.modulus);
-  var c1 = blinded.toRed(bn.mont(priv.prime1));
-  var c2 = blinded.toRed(bn.mont(priv.prime2));
-  var qinv = priv.coefficient;
-  var p = priv.prime1;
-  var q = priv.prime2;
-  var m1 = c1.redPow(priv.exponent1);
-  var m2 = c2.redPow(priv.exponent2);
-  m1 = m1.fromRed();
-  m2 = m2.fromRed();
-  var h = m1.isub(m2).imul(qinv).umod(p);
-  h.imul(q);
-  m2.iadd(h);
-  return new Buffer(m2.imul(blinds.unblinder).umod(priv.modulus).toArray(false, len));
+
+function getr (priv) {
+  var len = priv.modulus.byteLength()
+  var r
+  do {
+    r = new BN(randomBytes(len))
+  } while (r.cmp(priv.modulus) >= 0 || !r.umod(priv.prime1) || !r.umod(priv.prime2))
+  return r
 }
-crt.getr = getr;
-function getr(priv) {
-  var len = priv.modulus.byteLength();
-  var r = new bn(randomBytes(len));
-  while (r.cmp(priv.modulus) >=  0 || !r.umod(priv.prime1) || !r.umod(priv.prime2)) {
-    r = new bn(randomBytes(len));
-  }
-  return r;
+
+function crt (msg, priv) {
+  var blinds = blind(priv)
+  var len = priv.modulus.byteLength()
+  var blinded = new BN(msg).mul(blinds.blinder).umod(priv.modulus)
+  var c1 = blinded.toRed(BN.mont(priv.prime1))
+  var c2 = blinded.toRed(BN.mont(priv.prime2))
+  var qinv = priv.coefficient
+  var p = priv.prime1
+  var q = priv.prime2
+  var m1 = c1.redPow(priv.exponent1).fromRed()
+  var m2 = c2.redPow(priv.exponent2).fromRed()
+  var h = m1.isub(m2).imul(qinv).umod(p).imul(q)
+  return m2.iadd(h).imul(blinds.unblinder).umod(priv.modulus).toArrayLike(Buffer, 'be', len)
 }
+crt.getr = getr
+
+module.exports = crt
 
 }).call(this)}).call(this,require("buffer").Buffer)
 
-},{"bn.js":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-rsa\\node_modules\\bn.js\\lib\\bn.js","buffer":"buffer","randombytes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\randombytes\\browser.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-rsa\\node_modules\\bn.js\\lib\\bn.js":[function(require,module,exports){
-arguments[4]["C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\asn1.js\\node_modules\\bn.js\\lib\\bn.js"][0].apply(exports,arguments)
-},{"buffer":"buffer"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-sign\\algos.js":[function(require,module,exports){
+},{"bn.js":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\bn.js\\lib\\bn.js","buffer":"buffer","randombytes":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\randombytes\\browser.js"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-sign\\algos.js":[function(require,module,exports){
 module.exports = require('./browser/algorithms.json')
 
 },{"./browser/algorithms.json":"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-sign\\browser\\algorithms.json"}],"C:\\Users\\CosminIulianIrimia\\Documents\\Work\\epi-workspace\\privatesky\\node_modules\\browserify-sign\\browser\\algorithms.json":[function(require,module,exports){

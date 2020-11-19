@@ -7,7 +7,7 @@
 :host {
     scroll-behavior: smooth;
     overflow-y: auto;
-    height: 100vh;
+    height: 100%;
     display: block;
 }
 
@@ -60,7 +60,6 @@
         max-width: calc(100% - 25rem );
     }
 }
-
 
 @media(max-width: 1366px) {
     .page-content {
